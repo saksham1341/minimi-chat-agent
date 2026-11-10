@@ -39,7 +39,7 @@ export function Turn(props: {
         <Working turn={turn} />
         {live && !turn.text && turn.draft === undefined && turn.answer === undefined && <Skeleton />}
         {turn.draft !== undefined && <Prose className="prose is-draft" text={turn.draft} sources={turn.sources} />}
-        {turn.text && <Prose className="prose is-arriving" text={turn.text} sources={turn.sources} />}
+        {turn.text && <Prose className="prose is-arriving" text={turn.text} sources={turn.sources} fixed={turn.fixed} />}
         {card &&
           (canvas && turn.shape !== "choices" ? (
             <button className={`canvas-ref${focused ? " is-focused" : ""}`} onClick={onFocus}>

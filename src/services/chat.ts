@@ -18,7 +18,8 @@ import { asked } from "../agents/conversation.ts";
 import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, type OutputShape } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
-import { answerShapes, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
+import { applyEdits, Fixes } from "../domain/edits.ts";
+import { answerShapes, FIXES_SHAPE, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
 import { IndexCard, ShapeIndex } from "../domain/card.ts";
 import { bareCitations, citationsIn, describeProblems, markUnverified, quoteFound, quoteProblems, repairCitations } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
@@ -48,6 +49,10 @@ export type TurnEvent =
   | { type: "revise"; reason: string }
   /** The answer's text is complete and checked; what follows (its index card) is not shown. */
   | { type: "settled"; text: string }
+  /** The reply's citations are being corrected in place; the reply stays on screen. */
+  | { type: "fixing"; reason: string }
+  /** The corrected reply, and the sources whose citations changed, to show where. */
+  | { type: "patch"; text: string; fixed: string[] }
   | { type: "shape"; shape: string; partial: unknown }
   | { type: "done"; turn: TurnRecord; cutShort: boolean }
   | { type: "error"; message: string };
@@ -160,11 +165,14 @@ export class ChatService {
     let history: Entry[] = transcript;
     let next = ask;
     let corrections = 0;
+    // A citation correction comes back as edits to the reply: the reply waits here meanwhile.
+    let patching: { shape: string; text: string; answer?: unknown } | undefined;
+    let runEndings = endings;
     try {
       while (true) {
         let ended: { shape: string; text: string; answer?: unknown; cutShort: boolean } | undefined;
         const events = runtime.run(
-          { runId, model: model.id, instruction: INSTRUCTION, history, ask: next, endings },
+          { runId, model: model.id, instruction: INSTRUCTION, history, ask: next, endings: runEndings },
           input.signal,
         );
         for await (const event of events) {
@@ -176,13 +184,16 @@ export class ChatService {
             const d = event.delta;
             if (d.type === "text") {
               spoke += d.text;
-              out.push({ type: "text", text: d.text });
+              // While fixing, the reply on screen stays put; what the model says around its edits is not the answer.
+              if (!patching) out.push({ type: "text", text: d.text });
             } else if (d.type === "thinking") {
               out.push({ type: "thinking", text: d.text });
             } else if (d.type === "tool_input" && d.name === SEARCH_TOOL.name) {
               // The query as the model writes it: a lane on screen before the search is even sent.
               const q = (d.partial as { query?: string } | null)?.query;
               if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
+            } else if (patching) {
+              // The fix's own calls (its edits, any search) change nothing on screen until applied.
             } else if (d.name === INDEX_TOOL) {
               // The index card follows the answer and is not shown. The text is complete once it
               // starts: if it holds up, it is the answer now, without waiting for the card.
@@ -210,14 +221,47 @@ export class ChatService {
         }
         if (!ended) throw new Error("The agent runtime stopped without an answer.");
 
+        if (patching) {
+          const fix = ended.shape === FIXES_SHAPE.name ? Fixes.safeParse(ended.answer) : undefined;
+          if (fix?.success) {
+            const { text, applied, missed } = applyEdits(patching.text, fix.data.edits);
+            log(`fixes: ${applied.length} applied, ${missed.length} missed`);
+            out.push({
+              type: "patch",
+              text: markUnverified(repaired(text), book.snapshots),
+              fixed: [...new Set(citationsIn(applied.map((e) => e.replace).join(" ")).map((c) => c.id))],
+            });
+            ended = { ...patching, text, cutShort: ended.cutShort };
+          } else if (ended.shape === "reply" && ended.text.trim()) {
+            // It wrote the reply out again after all: shown as a revision, the card from the first one kept.
+            out.push({ type: "revise", reason: "Rewriting" });
+            out.push({ type: "text", text: ended.text });
+            ended = { ...patching, text: ended.text, cutShort: ended.cutShort };
+          } else {
+            ended = { ...patching, cutShort: ended.cutShort };
+          }
+          patching = undefined;
+        }
+
         const problem = this.check(ended, shapes, book);
         if (problem && corrections++ < MAX_CORRECTIONS) {
           log(`correction: ${problem.split("\n").slice(0, 3).join(" ").slice(0, 300)}`);
           // Continue the run with the correction: the model sees what it said and why it was sent back.
           history = [...transcript, ask, ...fresh];
-          next = asked(problem, undefined, "runtime");
+          const prose = ended.shape === "reply" || ended.shape === "index";
+          if (prose && problem.startsWith("Some citations")) {
+            // Fixed in place: the model sends edits, the rest of the reply stands as written.
+            patching = { shape: ended.shape, text: ended.text, answer: ended.answer };
+            runEndings = [{ name: FIXES_SHAPE.name, description: FIXES_SHAPE.description, schema: FIXES_SHAPE.schema }];
+            next = asked(`${problem}\nFix only these, in place, with answer_fixes. Search first if you need a source that says it.`, undefined, "runtime");
+            const n = problem.split("\n").filter((l) => l.startsWith("- ")).length;
+            out.push({ type: "fixing", reason: `Fixing ${n} citation${n === 1 ? "" : "s"}` });
+          } else {
+            runEndings = endings;
+            next = asked(problem, undefined, "runtime");
+            out.push({ type: "revise", reason: "Rewording" });
+          }
           fresh.push(next);
-          out.push({ type: "revise", reason: problem.startsWith("Some citations") ? "Fixing citations that didn't match their sources" : "Rewording" });
           spoke = "";
           continue;
         }

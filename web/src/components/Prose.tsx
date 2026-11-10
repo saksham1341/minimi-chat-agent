@@ -29,7 +29,7 @@ const linkCitations = (text: string, quotes: Quote[]) =>
     // Anything else that names a source in brackets still reads as a citation, never as raw text.
     .replace(/\[(S\d[0-9a-f]*)\b[^\]\n]*\](?!\()/g, (_m, id: string) => `[${id}](#cite-${id})`);
 
-export function Prose({ text, sources, className }: { text: string; sources: Source[]; className?: string }) {
+export function Prose({ text, sources, className, fixed }: { text: string; sources: Source[]; className?: string; fixed?: string[] }) {
   const quotes: Quote[] = [];
   const linked = linkCitations(text, quotes);
   return (
@@ -39,7 +39,7 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
         components={{
           a: ({ href, children }) =>
             href?.startsWith("#cite-") ? (
-              <Cite id={href.slice(6).split("-")[0]} sources={sources} {...(quotes[Number(href.split("-")[2])] ?? {})} />
+              <Cite id={href.slice(6).split("-")[0]} sources={sources} fixed={fixed?.includes(href.slice(6).split("-")[0])} {...(quotes[Number(href.split("-")[2])] ?? {})} />
             ) : (
               <a href={href} target="_blank" rel="noreferrer noopener">
                 {children}
@@ -58,7 +58,7 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
  * source: site, title, date and the passage the answer drew on. On a touch screen, where there is
  * no hover, a tap opens the same preview as a bottom sheet with a button to open the page.
  */
-export function Cite({ id, sources, quote, verified }: { id: string; sources: Source[]; quote?: string; verified?: boolean }) {
+export function Cite({ id, sources, quote, verified, fixed }: { id: string; sources: Source[]; quote?: string; verified?: boolean; fixed?: boolean }) {
   const source = sources.find((s) => s.id === id);
   const key = useId();
   const open = useSyncExternalStore(preview.subscribe, () => preview.current?.key === key);
@@ -72,7 +72,7 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
     <>
       <a
         ref={anchor}
-        className={`cite${open ? " is-open" : ""}${verified === false ? " is-unverified" : ""}`}
+        className={`cite${open ? " is-open" : ""}${verified === false ? " is-unverified" : ""}${fixed ? " is-fixed" : ""}`}
         href={source.url}
         target="_blank"
         rel="noreferrer noopener"

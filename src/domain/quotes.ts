@@ -120,7 +120,7 @@ export function describeProblems(problems: QuoteProblem[]): string {
   return (
     `Some citations do not hold up against the search results:\n${lines.join("\n")}\n` +
     `Copy each quote exactly from the result you cite (use ... for words you leave out), cite a result that ` +
-    `does say it, or drop the claim. Then give the whole answer again.`
+    `does say it, or drop the claim.`
   );
 }
 

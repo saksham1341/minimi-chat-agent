@@ -79,4 +79,37 @@ describe("checking a run and continuing it", () => {
     expect(transcript[1]).toMatchObject({ text: "Neon's Launch plan costs $19 a month.", toolCalls: [] });
     expect(events.some((e) => e.type === "revise")).toBe(true);
   });
+
+  it("corrects citations with edits in place, leaving the rest of the reply as written", async () => {
+    const requests: RunRequest[] = [];
+    const reply = 'Neon is the cheapest. Its Launch plan costs $19 [S9abcd "Launch $19"]. Supabase Pro is $25.';
+    const runtime: AgentRuntimePort = {
+      models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
+      async *run(request) {
+        requests.push(request);
+        if (requests.length === 1) {
+          yield { type: "entry", entry: { kind: "said", text: reply, toolCalls: [], stopReason: "end_turn" } };
+          yield { type: "done", shape: "reply", text: reply, rounds: 1, cutShort: false };
+        } else {
+          const answer = { edits: [{ find: ' [S9abcd "Launch $19"]', replace: "" }] };
+          yield { type: "entry", entry: { kind: "said", text: "", toolCalls: [{ id: "f1", name: "answer_fixes", arguments: answer }], stopReason: "tool_use" } };
+          yield { type: "done", shape: "fixes", text: "", answer, rounds: 1, cutShort: false };
+        }
+      },
+    };
+    const store = new SqliteMemory(":memory:");
+    const chat = new ChatService({
+      store, clock: new SystemClock(), models: new ModelCatalog(runtime), runtime,
+      search: new SearchService({ name: "fake", available: true, read: async () => [], search: async () => [] }),
+      recall: new RecallService(store), ledger: new LedgerService(store), log: () => {},
+    });
+    const events: TurnEvent[] = [];
+    for await (const e of chat.turn({ message: "Cheapest Postgres host?", timeZone: "UTC" })) events.push(e);
+    expect(requests[1].endings.map((e) => e.name)).toEqual(["fixes"]);
+    const expected = "Neon is the cheapest. Its Launch plan costs $19. Supabase Pro is $25.";
+    expect(events.find((e) => e.type === "patch")).toMatchObject({ text: expected });
+    expect(events.some((e) => e.type === "revise")).toBe(false);
+    const done = events.find((e) => e.type === "done");
+    expect(done?.type === "done" && done.turn.lead).toBe(expected);
+  });
 });

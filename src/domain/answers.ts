@@ -10,6 +10,7 @@
  * question back to the person when guessing would waste their time.
  */
 import { z } from "zod";
+import { Fixes } from "./edits.ts";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
 import { IndexCard, ShapeIndex } from "./card.ts";
@@ -187,3 +188,11 @@ export function answerShapes(sources: () => Source[] = () => []): OutputShape[] 
 }
 
 export const ANSWER_SHAPES = answerShapes();
+
+/** Offered only when a reply's citations are sent back: the corrections, as edits to the reply. */
+export const FIXES_SHAPE = shape(
+  "fixes",
+  Fixes,
+  "Correct your last reply in place, ending the turn. Each edit copies a passage of the reply exactly and gives what " +
+    "it becomes; everything else stays as written. Do not write the reply out again.",
+);

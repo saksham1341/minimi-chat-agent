@@ -15,6 +15,8 @@ export interface ViewTurn {
   /** Text being redone, kept on screen (dimmed) until the new text starts, so nothing vanishes. */
   draft?: string;
   revising?: string;
+  /** Sources whose citations a correction just changed in place, to show where. */
+  fixed?: string[];
   /** The answer's text is final: the working notes fold away. */
   settled: boolean;
   activity: Activity[];
@@ -63,6 +65,10 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, thinking: (turn.thinking + event.text).slice(-4000) };
     case "revise":
       return { ...turn, draft: turn.text || turn.draft || "", revising: event.reason, text: "", settled: false };
+    case "fixing":
+      return { ...turn, revising: event.reason, settled: false };
+    case "patch":
+      return { ...turn, text: event.text, fixed: event.fixed, revising: undefined, settled: true };
     case "settled":
       return { ...turn, text: event.text, draft: undefined, revising: undefined, settled: true };
     case "searching":

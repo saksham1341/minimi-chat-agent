@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applyEdits } from "../src/domain/edits.ts";
 import { bareCitations, citationsIn, malformedCitations, markUnverified, quoteFound, quoteProblems, repairCitations, withoutQuotes } from "../src/domain/quotes.ts";
 
 const page = "Pricing. **Starter** — $20/seat/month, billed monthly. Professional: $100 per seat per month, billed annually.";
@@ -82,5 +83,13 @@ describe("a quote has to support its sentence's figure", () => {
 
   it("leaves sentences without figures to the quote lookup alone", () => {
     expect(verified('Starter is billed monthly [S1 "billed monthly"].')).toEqual([true]);
+  });
+});
+
+describe("corrections as edits", () => {
+  it("changes only the passages named, and reports the ones it cannot find", () => {
+    const r = applyEdits("A is $5 [S1]. B is $7 [S2].", [{ find: "$5 [S1]", replace: '$6 [S1 "$6/mo"]' }, { find: "C is", replace: "D is" }]);
+    expect(r.text).toBe('A is $6 [S1 "$6/mo"]. B is $7 [S2].');
+    expect(r.missed).toHaveLength(1);
   });
 });
