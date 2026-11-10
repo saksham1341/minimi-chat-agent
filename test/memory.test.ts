@@ -9,6 +9,7 @@ import { handleMcp } from "../src/api/mcp.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { evidenceProblem } from "../src/domain/answers.ts";
+import { planRechecks } from "../src/domain/recheck.ts";
 import type { SearchProvider } from "../src/ports/search.ts";
 
 const IST = "Asia/Kolkata";
@@ -165,5 +166,23 @@ describe("the evidence rule for a 'changed' verdict", () => {
 
   it("does not police verdicts other than 'changed' and 'corrected'", () => {
     expect(evidenceProblem(report(["S1"], "unchanged"), sources)).toBeNull();
+  });
+});
+
+describe("planning a re-check from the ledger", () => {
+  const claim = (subject: string, value: string, sourceUrl?: string) => ({ id: "", turnId: "", conversationId: "", subject, value, sourceUrl, observedAt: "2026-11-09T06:00:00.000Z" });
+
+  it("re-reads each site the stated facts came from, live, once per site", () => {
+    const plan = planRechecks([
+      claim("HubSpot Sales Hub, Price/seat/month", "$20 (Starter)", "https://www.hubspot.com/pricing/sales"),
+      claim("HubSpot Sales Hub, Free tier", "Yes, 2 users", "https://www.hubspot.com/pricing/sales"),
+      claim("Pipedrive, Price/seat/month", "$14 (Lite)", "https://www.pipedrive.com/en/pricing"),
+      claim("Some fact", "no source"),
+    ]);
+    const rereads = plan.filter((p) => p.fresh);
+    expect(rereads.map((p) => p.domains?.[0])).toEqual(["hubspot.com", "pipedrive.com"]);
+    expect(rereads[0].query).toBe("HubSpot Sales Hub pricing plans");
+    // and the news half, since the day the facts were stated
+    expect(plan.filter((p) => p.since).map((p) => p.since)).toEqual(["2026-11-09", "2026-11-09"]);
   });
 });

@@ -28,8 +28,10 @@ export interface Recollection {
   context: string;
   /** What to show on screen ("Looked back at Tue 3 Nov: 2 exchanges"). */
   activity: Activity[];
-  /** Earlier answers with stated facts were found: the turn is a re-check, worth more thought. */
+  /** The person is looking back at earlier answers that stated facts: a re-check. */
   recheck: boolean;
+  /** Those facts, with where each came from, for planning the re-check. */
+  claims: Claim[];
 }
 
 export class RecallService {
@@ -49,7 +51,7 @@ export class RecallService {
       const strong = terms.length
         ? this.store.searchTurns(terms, 3, conversationId).filter((t) => overlap(t, terms) >= Math.min(2, terms.length))
         : [];
-      if (!strong.length) return { context: wrap(lines), activity, recheck: false };
+      if (!strong.length) return { context: wrap(lines), activity, recheck: false, claims: [] };
     }
 
     const chosen = new Map<string, TurnRecord>();
@@ -67,7 +69,10 @@ export class RecallService {
       }
     }
 
-    if (terms.length) {
+    // A named day that found something is the answer to "which conversation": topic matches on top
+    // of it would add later, look-alike exchanges and the model may anchor on the wrong one.
+    const datedHit = refs.length > 0 && chosen.size > 0;
+    if (terms.length && !datedHit) {
       const matched = this.store
         .searchTurns(terms, 6, conversationId)
         .filter((t) => !chosen.has(t.id) && (looksBack || overlap(t, terms) >= Math.min(2, terms.length)));
@@ -96,7 +101,8 @@ export class RecallService {
       for (const c of recent) lines.push(`- ${shortDate(c.createdAt, tz)}: ${c.title}`);
     }
 
-    return { context: wrap(lines), activity, recheck: [...claims.values()].some((c) => c.length > 0) };
+    const stated = [...claims.values()].flat();
+    return { context: wrap(lines), activity, recheck: looksBack && stated.length > 0, claims: stated };
   }
 }
 

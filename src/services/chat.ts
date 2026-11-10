@@ -25,7 +25,8 @@ import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
 import type { LedgerService } from "./ledger.ts";
 import type { RecallService } from "./recall.ts";
-import { CitedSearch } from "./web-search.ts";
+import { CitedSearch, SEARCH_TOOL } from "./web-search.ts";
+import { planRechecks } from "../domain/recheck.ts";
 
 export type TurnEvent =
   | { type: "start"; conversation: Conversation; turnId: string; at: string; model: ModelInfo }
@@ -98,7 +99,25 @@ export class ChatService {
       out.push({ type: "sources", sources: [...sources] });
     });
 
-    const ask = asked(message, memory.context);
+    // A re-check starts with the pages the stated facts came from already re-read: planned from the
+    // ledger, fired in parallel through the same tool path, before the model's first token.
+    let context = memory.context;
+    let prefetched = false;
+    if (memory.recheck) {
+      const plan = planRechecks(memory.claims);
+      const reads = await Promise.all(plan.map((args, i) => tool.run({ id: `recheck-${i}`, name: SEARCH_TOOL.name, arguments: { ...args } }, input.signal)));
+      const done = plan.map((p, i) => ({ p, r: reads[i] })).filter(({ r }) => !r.failed);
+      if (done.length) {
+        prefetched = true;
+        const ran = done.map(({ p }) => `- "${p.query}"${p.domains ? ` on ${p.domains.join(", ")}, read live` : ""}${p.since ? ` since ${p.since}` : ""}`);
+        context +=
+          `\n\n<rechecked written-by="system">\nThese searches were already run for this re-check, just now:\n${ran.join("\n")}\n` +
+          `Running them again, or rewordings of them, returns the same pages. Answer from these results. Search again only ` +
+          `for a specific gap they leave (a vendor page that came back empty, say), at most once.\n\n` +
+          `${done.map(({ r }) => r.content).join("\n\n")}\n</rechecked>`;
+      }
+    }
+    const ask = asked(message, context);
     const fresh: Entry[] = [];
     const record = (shape: string, text: string, answer?: unknown): TurnRecord => ({
       id: turnId,
@@ -125,6 +144,8 @@ export class ChatService {
         ask,
         history: store.transcript(conversation.id),
         endings: answerShapes(() => tool.sources),
+        // The re-reads are done, so a re-check gets one round for gaps and then answers.
+        ...(prefetched ? { maxRounds: 2 } : {}),
         signal: input.signal,
       })) {
         if (event.type === "retract") {

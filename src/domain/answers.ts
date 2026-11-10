@@ -57,7 +57,7 @@ export const Changes = z.object({
           ),
         before: z.string().optional().describe("What was said or true at the baseline."),
         now: z.string().optional().describe("What is true now."),
-        note: z.string().optional().describe("One line: when it changed, or why it could not be verified."),
+        note: z.string().optional().describe("At most 12 words: when it changed, or why it could not be verified. Omit when nothing changed."),
         sources: sourceIds,
       }),
     )
