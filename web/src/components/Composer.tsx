@@ -1,9 +1,10 @@
 /** Where the person types, picks the model, and stops an answer they no longer need. */
 import { useEffect, useRef, useState } from "react";
-import type { Meta } from "../api.ts";
+import { api, type MemoryPreview, type Meta } from "../api.ts";
 import { Chevron } from "./icons.tsx";
 
 export function Composer(props: {
+  conversationId: string | null;
   meta: Meta | null;
   modelId: string | null;
   onModel: (id: string) => void;
@@ -12,6 +13,7 @@ export function Composer(props: {
   busy: boolean;
 }) {
   const [text, setText] = useState("");
+  const preview = useMemoryPreview(text, props.conversationId, props.busy);
   const area = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -34,6 +36,13 @@ export function Composer(props: {
   const noModels = props.meta && !props.meta.models.length;
   return (
     <div className="composer">
+      {preview.length > 0 && (
+        <MemoryLine
+          preview={preview}
+          // Two or more days named by the same words: let the person say which, in the message itself.
+          onPick={(label) => setText((t) => `${t.trimEnd()} (${label})`)}
+        />
+      )}
       <label className="visually-hidden" htmlFor="message">Message</label>
       <textarea
         id="message"
@@ -110,6 +119,57 @@ function ModelPicker({ meta, modelId, onModel }: { meta: Meta | null; modelId: s
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * What the draft will recall, while it is being typed: the same matching the turn will do, asked
+ * for a quarter-second after typing pauses, the previous ask cancelled. Free: memory only.
+ */
+function useMemoryPreview(text: string, conversationId: string | null, busy: boolean): MemoryPreview[] {
+  const [preview, setPreview] = useState<MemoryPreview[]>([]);
+  useEffect(() => {
+    if (busy || text.trim().length < 8) {
+      setPreview([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      api.recall(text, conversationId, controller.signal).then(setPreview, () => {});
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [text, conversationId, busy]);
+  return preview;
+}
+
+function MemoryLine({ preview, onPick }: { preview: MemoryPreview[]; onPick: (label: string) => void }) {
+  const byDay = preview.filter((p) => p.byDay);
+  const short = (label: string) => label.replace(/,? \d{4}$/, "");
+  // More than one day answers to the words used ("Monday" could be either): offer them.
+  if (byDay.length > 1) {
+    return (
+      <div className="memory-line" aria-live="polite">
+        <span className="memory-line-label">Which day?</span>
+        {byDay.slice(0, 3).map((p) => (
+          <button key={p.day} className="memory-chip" onClick={() => onPick(short(p.label))} title={p.questions.join(" · ")}>
+            {short(p.label)}
+          </button>
+        ))}
+      </div>
+    );
+  }
+  const first = byDay[0] ?? preview[0];
+  const more = preview.length - 1;
+  return (
+    <div className="memory-line" aria-live="polite">
+      <span className="memory-dot" aria-hidden />
+      <span className="memory-line-label">Remembers {short(first.label)}</span>
+      <span className="memory-line-q">"{first.questions[0]}"</span>
+      {more > 0 && <span className="memory-line-more">and {more} more</span>}
     </div>
   );
 }

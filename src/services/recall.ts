@@ -24,6 +24,14 @@ const STOP = new Set(
 /** A word counts as a topic signal if at most this share of past exchanges contain it (with enough history). */
 const RARE_SHARE = 0.2;
 
+export interface MemoryPreview {
+  day: string; // YYYY-MM-DD
+  label: string; // "Mon, 9 Nov 2026"
+  /** Matched by the day's own words ("on Monday"), not only by topic. */
+  byDay: boolean;
+  questions: string[];
+}
+
 export interface Recollection {
   /** The text block placed before the person's message. */
   context: string;
@@ -54,13 +62,38 @@ interface Scored {
 export class RecallService {
   constructor(private readonly store: MemoryStore) {}
 
+  /**
+   * What the message matches, for showing as the person types: the same matching the real turn
+   * uses, so the preview is what the agent will see. Costs a few milliseconds and nothing else.
+   */
+  preview(message: string, conversationId: string, now: Date, tz: string): MemoryPreview[] {
+    const { kept } = this.match(message, conversationId, now, tz);
+    const byDay = groupBy(kept, (k) => isoDay(dateIn(new Date(k.turn.at), tz)));
+    return [...byDay.entries()].map(([day, group]) => ({
+      day,
+      label: dayLabel(ymdOf(day)),
+      byDay: group.some((k) => k.date >= 1),
+      questions: [...new Set(group.map((k) => k.turn.question))].slice(0, 3),
+    }));
+  }
+
   recall(message: string, conversationId: string, now: Date, tz: string): Recollection {
     const today = dateIn(now, tz);
-    const words = new Set(tokens(message));
     const topics = topicTerms(message);
-    const rare = this.rareTerms(topics, now);
     const lines = [`Now: ${describeNow(now, tz)} (${tz}).`];
     const activity: Activity[] = [];
+    const { kept, recent } = this.match(message, conversationId, now, tz);
+    const dated = kept.filter((k) => k.date >= 1);
+
+    // The calendar, so the model reads which day is meant instead of working it out.
+    lines.push("", ...calendar(today, tz, recent));
+    return this.describe(conversationId, tz, topics, lines, activity, kept, dated);
+  }
+
+  private match(message: string, conversationId: string, now: Date, tz: string): { kept: Scored[]; recent: TurnRecord[] } {
+    const today = dateIn(now, tz);
+    const words = new Set(tokens(message));
+    const rare = this.rareTerms(topicTerms(message), now);
 
     // Candidates: everything recent (to match on day words), plus older exchanges on the topic.
     const recent = this.store.turnsBetween(startOfDay(addDays(today, -WINDOW_DAYS), tz), now, 500);
@@ -83,11 +116,18 @@ export class RecallService {
       scored.push({ turn, date, topic, score: date + 0.8 * topic + 0.1 * Math.max(0, 1 - age / WINDOW_DAYS) });
     }
     scored.sort((a, b) => b.score - a.score);
-    const kept = scored.slice(0, 10);
-    const dated = kept.filter((k) => k.date >= 1);
+    return { kept: scored.slice(0, 10), recent };
+  }
 
-    // The calendar, so the model reads which day is meant instead of working it out.
-    lines.push("", ...calendar(today, tz, recent));
+  private describe(
+    conversationId: string,
+    tz: string,
+    topics: string[],
+    lines: string[],
+    activity: Activity[],
+    kept: Scored[],
+    dated: Scored[],
+  ): Recollection {
 
     if (kept.length) {
       const byDay = groupBy(kept, (k) => isoDay(dateIn(new Date(k.turn.at), tz)));

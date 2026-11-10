@@ -37,6 +37,13 @@ export function serve(app: App, staticDir: string) {
         return json(res, { conversation, turns: app.store.turns(conversation.id) });
       }
       if (path === "/api/chat" && req.method === "POST") return chat(app, req, res);
+      if (path === "/api/recall" && req.method === "GET") {
+        // The type-ahead preview: memory only. No model, no search, nothing stored.
+        const q = url.searchParams;
+        const message = (q.get("message") ?? "").slice(0, 2000);
+        const zone = validZone(q.get("timeZone") ?? undefined) ?? app.settings.timeZone;
+        return json(res, message.trim().length < 8 ? [] : app.recall.preview(message, q.get("conversationId") ?? "", app.clock.now(), zone));
+      }
       if (path === "/mcp") {
         // The tool server is for the runtime, which by default is this same process.
         const from = req.socket.remoteAddress?.replace("::ffff:", "");

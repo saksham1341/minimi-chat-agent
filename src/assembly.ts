@@ -103,7 +103,7 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   const ledger = new LedgerService(store, extractor);
   const chat = new ChatService({ store, clock, models: catalog, tools, recall, ledger, log });
 
-  return { settings, catalog, search, store, clock, chat };
+  return { settings, catalog, search, store, clock, chat, recall };
 }
 
 export type App = ReturnType<typeof assemble>;

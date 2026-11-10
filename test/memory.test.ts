@@ -66,6 +66,11 @@ describe("recall", () => {
     expect(asked("Remind me which CRMs we were looking at")).toContain("Person asked: Shortlist CRM tools");
   });
 
+  it("previews, as the person types, exactly the days the turn will recall", () => {
+    const preview = recall.preview("On Monday we shortlisted 5 CRM tools", "current", NOW, IST);
+    expect(preview).toEqual([{ day: "2026-11-09", label: expect.stringContaining("9 Nov"), byDay: true, questions: ["Shortlist CRM tools for a 20-person sales team", "Best espresso grinder under $300?"] }]);
+  });
+
   it("reads ahead only for what the message points at by day and topic", () => {
     const r = recall.recall("Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?", "current", NOW, IST);
     expect(r.readAhead.map((c) => c.subject)).toEqual(["Neon, Launch plan"]);

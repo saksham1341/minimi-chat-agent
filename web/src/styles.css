@@ -422,6 +422,16 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
 .lane.is-ahead .lane-query { color: var(--ink-soft); font-weight: 500; }
 .lane.is-reused .lane-tag { background: var(--teal-soft); color: var(--teal); }
 
+/* What the draft will recall, above the text box. */
+.memory-line { display: flex; align-items: center; gap: 0.45rem; min-width: 0; margin: -0.15rem 0 0.45rem; font-size: 0.78rem; color: var(--muted); }
+.memory-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--highlighter); box-shadow: 0 0 0 1px rgba(28, 36, 48, 0.25); }
+.memory-line-label { flex: none; font-weight: 600; color: var(--ink-soft); }
+.memory-line-q { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--serif); font-style: italic; }
+.memory-line-more { flex: none; color: var(--faint); }
+.memory-chip { padding: 0.15rem 0.55rem; border: 1px solid var(--rule); border-radius: 999px; background: var(--highlighter-soft); font-size: 0.78rem; font-weight: 600; color: var(--ink); }
+.memory-chip:hover { border-color: var(--ink-soft); }
+@media (prefers-reduced-motion: no-preference) { .memory-line { animation: preview-in 160ms ease-out; } }
+
 /* ---- small screens --------------------------------------------------------------------- */
 
 @media (max-width: 899px) {

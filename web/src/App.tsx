@@ -174,7 +174,7 @@ export function App() {
         </div>
 
         <div className="dock" ref={dock}>
-          <Composer meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
+          <Composer conversationId={conversationId} meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
         </div>
       </main>
       {(showCanvas || showSheet) && canvasTurn && (

@@ -12,7 +12,10 @@ Node 22.13+. Every variable it reads is in `.env.example`; startup prints what i
 
 The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?") need **a date, a memory of what was said that day, and evidence about now**. A turn (`src/services/chat.ts`):
 
-1. **Recall, in code, before the model, with no trigger phrases.** "Monday", "3 November", "last Tuesday" become instants in the person's time zone (`domain/time.ts`, tested). Those days' exchanges go into a `<context>` block on the message, along with exchanges sharing the message's *rare* words (SQLite FTS5; a word counts only if few past exchanges contain it, so "now" or "thing" never match). Each comes with the facts stated then and the source words they came from. A named day with nothing on it is said plainly. Whether any of it matters is the model's call.
+1. **Recall, in code, before the model, with no trigger phrases and no date grammar.**
+   - Every earlier exchange is described in its day's words, as seen from today: weekday, month and day number, "yesterday", "last week". It is then matched against the message as text, along with the message's rare words (SQLite FTS5; a word counts only if few past exchanges contain it). So "On Monday we shortlisted CRM tools" finds Monday's CRM exchange, and "now", "thing" or "Monday.com" find nothing.
+   - The matches go into a `<context>` block with the facts stated then, the source words they came from, and a three-week calendar. The model reads which day "last Tuesday" means, and sees when a day had nothing.
+   - As the person types, the composer previews what will be recalled ("Remembers Mon 9 Nov · …"), using the same matching, at no cost.
 2. **Reading ahead.** When a named day brings back earlier facts, the harness starts reading each vendor's own page live, plus its "announcements since" news, in the background as the model starts. If the model then searches for those, the answer is already there (measured: ten re-check searches in 0.0 s of tool time); if not, the reads are dropped.
 3. **The loop** (`agents/loop.ts`, ported from my framework Keel). The model's one tool, `web_search`, comes over MCP from the search service. Parallel calls return in one message, failures come back as results, and there is a round budget with a hard cap. A tool call written as text is caught and redone.
 4. **Answers have shapes.** Plain prose, or a comparison, a what-changed report or a clarifying question. Those are tool calls whose schema-checked arguments are the answer, each with a `headline`. They stream into a live canvas.
@@ -34,7 +37,7 @@ Measured on Sonnet 4.5 via Bedrock:
 ## Considered and rejected
 
 - **A recall tool or a router model.** Either adds a model round before anything useful, for arithmetic.
-- **An LLM to parse dates.** Slower, and wrong about weekdays.
+- **A date grammar, or an LLM to parse dates.** Grammars break on phrasings nobody wrote a rule for ("a week or so back", "Monday.com"), and an extra model call before every answer is slow. Matching days by their words, plus a calendar the model can read, needs neither.
 - **Embeddings.** Questions name products and days, which FTS and date ranges match exactly.
 - **Provider-native citations.** Claude-only, and uncertain on Bedrock's older API version. Checked quotes work with any model.
 - **More thinking on re-checks.** Tried it: +15–20 s and the same verdict. The harness's evidence rules fixed the false "changed" calls.

@@ -2,8 +2,9 @@
 import type { ModelInfo } from "../../src/agents/ports.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../../src/domain/memory.ts";
 import type { TurnEvent } from "../../src/services/chat.ts";
+import type { MemoryPreview } from "../../src/services/recall.ts";
 
-export type { Activity, Conversation, ModelInfo, Source, TurnEvent, TurnRecord };
+export type { Activity, Conversation, MemoryPreview, ModelInfo, Source, TurnEvent, TurnRecord };
 
 export interface Meta {
   models: ModelInfo[];
@@ -25,6 +26,13 @@ export const api = {
   meta: () => get<Meta>("/api/meta"),
   conversations: () => get<Conversation[]>("/api/conversations"),
   conversation: (id: string) => get<{ conversation: Conversation; turns: TurnRecord[] }>(`/api/conversations/${id}`),
+
+  /** What memory the draft matches, as the person types. Memory only: free, nothing stored. */
+  async recall(message: string, conversationId: string | null, signal: AbortSignal): Promise<MemoryPreview[]> {
+    const q = new URLSearchParams({ message, timeZone, ...(conversationId ? { conversationId } : {}) });
+    const response = await fetch(`/api/recall?${q}`, { signal });
+    return response.ok ? response.json() : [];
+  },
 
   /** Streams one turn's events. Aborting the signal stops the agent on the server too. */
   async chat(
