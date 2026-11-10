@@ -125,6 +125,8 @@ export function resolveTimeRefs(text: string, now: Date, tz: string): TimeRef[] 
     }
   };
 
+  // "may" is a month only when written as one: "I may 3 options" is not 3 May.
+  const isMonth = (m: RegExpExecArray, word: string) => !/^may$/i.test(word) || text.slice(m.index, m.index + m[0].length).includes("May");
   const pastDate = (d: number, month: number, year?: number): Ymd | null => {
     if (d < 1 || d > 31) return null;
     let day: Ymd = { y: year ?? today.y, m: month, d };
@@ -135,17 +137,31 @@ export function resolveTimeRefs(text: string, now: Date, tz: string): TimeRef[] 
 
   take(/\b(\d{4})-(\d{2})-(\d{2})\b/, (m) => days({ y: +m[1], m: +m[2], d: +m[3] }, 1, tz));
   take(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?(?:\\s+of)?\\s+${MONTH}\\b(?:,?\\s+(\\d{4}))?`), (m) => {
+    if (!isMonth(m, m[2])) return null;
     const day = pastDate(+m[1], MONTHS[m[2].slice(0, 3)], m[3] ? +m[3] : undefined);
     return day && days(day, 1, tz);
   });
   take(new RegExp(`\\b${MONTH}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`), (m) => {
+    if (!isMonth(m, m[1])) return null;
     const day = pastDate(+m[2], MONTHS[m[1].slice(0, 3)], m[3] ? +m[3] : undefined);
     return day && days(day, 1, tz);
   });
 
   take(/\b(?:the\s+)?day before yesterday\b/, () => days(addDays(today, -2), 1, tz));
   take(/\byesterday\b/, () => days(addDays(today, -1), 1, tz));
-  take(/\b(?:today|tonight|this (?:morning|afternoon|evening)|earlier today)\b/, () => days(today, 1, tz));
+  take(/\b(?:earlier today|this (?:morning|afternoon|evening)|tonight)\b/, () => days(today, 1, tz));
+  // Bare "today" points back only when it is about the conversation ("what did I ask you today"),
+  // not when it means now ("is your answer still correct today?").
+  const TALK = "(?:ask|asked|say|said|tell|told|talk|talked|discuss|discussed|chat|chatted|spoke)";
+  if (new RegExp(`\\b${TALK}\\b[^.?!]*\\btoday\\b|\\btoday\\b[^.?!]*\\b${TALK}\\b`, "i").test(text)) {
+    take(/\btoday\b/, () => days(today, 1, tz));
+  }
+  take(/\b(?:over|on|during)\s+the\s+weekend\b|\b(?:last|this|past)\s+weekend\b/, () => {
+    // The most recent Saturday (today, if it is one) and the Sunday after it.
+    const saturday = addDays(today, -((weekday(today) + 1) % 7));
+    return days(saturday, 2, tz, "the weekend");
+  });
+  take(/\bthe\s+other\s+day\b/, () => days(addDays(today, -6), 5, tz, "the other day"));
 
   take(/\b(?:a\s+)?(?:few|couple(?:\s+of)?)\s+days\s+ago\b/, () => days(addDays(today, -6), 5, tz, "a few days ago"));
   take(/\b(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\s+ago\b/, (m) => {
@@ -168,7 +184,8 @@ export function resolveTimeRefs(text: string, now: Date, tz: string): TimeRef[] 
   });
   take(/\bthis\s+month\b/, () => days({ ...today, d: 1 }, today.d, tz));
 
-  take(/\b(last|this|on|past|previous|next)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/, (m) => {
+  // Not "Monday.com" or "Friday-ish": a weekday followed by a dot-word or a hyphen is a name.
+  take(/\b(last|this|on|past|previous|next)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b(?![.\-]\w)/, (m) => {
     const qualifier = m[1];
     if (qualifier === "next") return null;
     const target = WEEKDAYS.indexOf(m[2]);

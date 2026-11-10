@@ -103,7 +103,8 @@ export class SqliteMemory implements MemoryStore {
   searchTurns(terms: string[], limit: number, excludeConversation?: string) {
     const clean = terms.map((t) => t.replace(/"/g, "")).filter(Boolean);
     if (!clean.length) return [];
-    const match = clean.map((t) => `"${t}"`).join(" OR ");
+    // Prefix match on a crude stem, so "CRMs" finds "CRM" and "pricing" finds "price"-less variants.
+    const match = clean.map((t) => `"${stem(t)}"*`).join(" OR ");
     const rows = this.db
       .prepare(
         `select turns.* from turns_fts join turns on turns.id = turns_fts.turn_id
@@ -134,6 +135,8 @@ export class SqliteMemory implements MemoryStore {
     }));
   }
 }
+
+const stem = (term: string) => (term.length > 3 ? term.replace(/(?:es|s)$/, "") : term);
 
 const toConversation = (r: Row): Conversation => ({
   id: r.id as string,

@@ -15,7 +15,7 @@ import type { MemoryStore } from "../ports/memory.ts";
 
 /** Words that point at an earlier conversation even without a date. */
 const LOOKS_BACK =
-  /\b(?:i|we)\s+(?:asked|said|discussed|talked|shortlisted|looked|compared|decided|mentioned|chose|picked)\b|\byou\s+(?:said|told|recommended|suggested|answered|mentioned|found)\b|\b(?:earlier|last time|previous(?:ly)?|remember|since then|still (?:correct|true|accurate|right|valid)|changed since|before)\b/i;
+  /\bremind me\b|\bwhat did (?:i|we|you)\b|\bwe were\b|\bwere we\b|\bthe other day\b|\bagain\b|\b(?:i|we)\s+(?:was|were)\s+(?:looking|asking|talking|comparing)\b|\b(?:i|we)\s+(?:asked|said|discussed|talked|shortlisted|looked|compared|decided|mentioned|chose|picked)\b|\byou\s+(?:said|told|recommended|suggested|answered|mentioned|found)\b|\b(?:earlier|last time|previous(?:ly)?|remember|since then|still (?:correct|true|accurate|right|valid)|changed since|before)\b/i;
 
 const STOP = new Set(
   "the a an and or but if then than that this these those what which who whom whose when where why how is are was were be been being do does did have has had i you we they he she it my your our their me us them to of in on at by for with from about into over after before since again still any some all most more less very just also can could would should will shall may might must not no yes there here its it's i'm you're we're last week month day today yesterday monday tuesday wednesday thursday friday saturday sunday january february march april may june july august september october november december asked ask said told tell answer answered correct right true changed change shipped anything something".split(
@@ -41,7 +41,16 @@ export class RecallService {
     const lines = [`Now: ${describeNow(now, tz)} (${tz}).`];
     const activity: Activity[] = [];
 
-    if (!looksBack) return { context: wrap(lines), activity, recheck: false };
+    // The topic search runs on every message: it costs milliseconds, and a regex deciding whether a
+    // message "looks back" will miss phrasings. When the message does not look back, only strong
+    // matches are kept, so an ordinary question is not padded with loosely related history.
+    const terms = topicTerms(message);
+    if (!looksBack) {
+      const strong = terms.length
+        ? this.store.searchTurns(terms, 3, conversationId).filter((t) => overlap(t, terms) >= Math.min(2, terms.length))
+        : [];
+      if (!strong.length) return { context: wrap(lines), activity, recheck: false };
+    }
 
     const chosen = new Map<string, TurnRecord>();
     const keep = (turns: TurnRecord[]) => turns.forEach((t) => chosen.set(t.id, t));
@@ -58,9 +67,10 @@ export class RecallService {
       }
     }
 
-    const terms = topicTerms(message);
     if (terms.length) {
-      const matched = this.store.searchTurns(terms, 6, conversationId).filter((t) => !chosen.has(t.id));
+      const matched = this.store
+        .searchTurns(terms, 6, conversationId)
+        .filter((t) => !chosen.has(t.id) && (looksBack || overlap(t, terms) >= Math.min(2, terms.length)));
       keep(matched);
       if (matched.length) activity.push({ kind: "recall", label: `Matched ${matched.length} earlier exchange${matched.length === 1 ? "" : "s"} by topic`, detail: terms.join(", ") });
     }
@@ -114,6 +124,12 @@ function describeTurn(turn: TurnRecord, currentConversation: string, claims: Cla
     for (const c of claims.slice(0, 60)) out.push(`  - ${c.subject}: ${c.value}${c.sourceUrl ? ` (source: ${c.sourceUrl})` : ""}`);
   }
   return out;
+}
+
+/** How many of the message's topic words an earlier exchange contains. */
+function overlap(turn: TurnRecord, terms: string[]): number {
+  const text = `${turn.question} ${turn.answerText}`.toLowerCase();
+  return terms.filter((t) => text.includes(t.length > 3 ? t.replace(/(?:es|s)$/, "") : t)).length;
 }
 
 export function topicTerms(message: string): string[] {

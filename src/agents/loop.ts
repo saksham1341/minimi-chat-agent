@@ -26,7 +26,12 @@ import { asked } from "./conversation.ts";
 import type { ChatModel, ModelDelta, ToolSpec, ToolSurface } from "./ports.ts";
 
 export const ENDING_PREFIX = "answer_";
-export const DEFAULT_MAX_ROUNDS = 6;
+export const DEFAULT_MAX_ROUNDS = 3;
+/** Rounds allowed past the ceiling for fixing an invalid answer. After that the turn ends regardless. */
+const GRACE_ROUNDS = 2;
+/** Tool-call markup written as text: the model meant to call a tool and wrote the call instead. */
+const LEAKED_CALL = /<\s*(?:invoke|function_calls|parameter)\b|<\/?\s*antml:/;
+const MAX_LEAK_RETRIES = 2;
 
 /** One way a turn is allowed to end, besides plain text. */
 export interface OutputShape {
@@ -43,6 +48,8 @@ export const toolName = (shape: OutputShape) => `${ENDING_PREFIX}${shape.name}`;
 export type LoopEvent =
   | { type: "delta"; delta: ModelDelta }
   | { type: "entry"; entry: Entry }
+  /** What was streamed this round was not an answer (a tool call written as text): take it back. */
+  | { type: "retract" }
   | {
       type: "done";
       /** `reply` for plain text, otherwise the shape's name. */
@@ -101,7 +108,15 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
 
   let rounds = 0;
   let cutShort = false;
+  let leaks = 0;
+  let lastWords = "";
   while (true) {
+    if (rounds >= maxRounds + GRACE_ROUNDS) {
+      // Every bounce (an invalid answer, a broken call) costs a round. Past the grace, stop and
+      // hand over the best prose there is, rather than spend without bound.
+      out.push({ type: "done", shape: "reply", text: lastWords || "I couldn't put a reliable answer together this time.", rounds, cutShort: true });
+      return;
+    }
     if (rounds >= maxRounds && !cutShort) {
       // Withdraw the tools rather than stopping dead: an answer from what was found, with the
       // gaps named, is worth more to the person than an error.
@@ -123,6 +138,20 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
     rounds += 1;
 
     const calls = said.toolCalls;
+    if (calls.length === 0 && LEAKED_CALL.test(said.text)) {
+      // Seen with Sonnet 4.5: the call written out as XML in the text instead of made. Showing it
+      // would put markup in front of the person; accepting it would end the turn with no answer.
+      record(said);
+      out.push({ type: "retract" });
+      if (leaks++ < MAX_LEAK_RETRIES) {
+        record(asked("Your last message wrote a tool call out as text instead of calling the tool. Make the call itself.", undefined, "runtime"));
+        continue;
+      }
+      const prose = said.text.slice(0, said.text.search(LEAKED_CALL)).trim();
+      out.push({ type: "done", shape: "reply", text: prose || lastWords || "I couldn't put that answer together. Ask me again?", rounds, cutShort });
+      return;
+    }
+    if (said.text.trim()) lastWords = said.text.trim();
     if (calls.length === 0) {
       record(said);
       out.push({ type: "done", shape: "reply", text: said.text, rounds, cutShort });

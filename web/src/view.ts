@@ -48,6 +48,8 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, sources: event.sources };
     case "text":
       return { ...turn, text: turn.text + event.text };
+    case "retract":
+      return { ...turn, text: "" };
     case "searching":
       return turn.text.trim() ? { ...turn, notes: [...turn.notes, turn.text.trim()], text: "" } : turn;
     case "shape": {

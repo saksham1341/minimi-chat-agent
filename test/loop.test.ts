@@ -100,4 +100,29 @@ describe("the loop", () => {
     expect(requests[3].tools.some((t) => t.name === "web_search")).toBe(false);
     expect(done(events)).toMatchObject({ text: "best effort", cutShort: true });
   });
+
+  it("takes back a tool call written as text and asks for the real call", async () => {
+    const leaked = '<invoke name="answer_changes"><parameter name="title">x</parameter></invoke>';
+    const { model, requests } = scripted({ text: leaked, toolCalls: [] }, { text: "A real answer.", toolCalls: [] });
+    const events = await collect(stream(model, tools(), { instruction: "", ask: asked("q"), endings: ANSWER_SHAPES }));
+    expect(events.some((e) => e.type === "retract")).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(done(events).text).toBe("A real answer.");
+    expect(done(events).text).not.toMatch(/<invoke/);
+  });
+
+  it("never ends a turn with tool-call markup as the answer", async () => {
+    const leaked = 'Here it is: <invoke name="answer_changes"></invoke>';
+    const { model } = scripted(...Array.from({ length: 5 }, () => ({ text: leaked, toolCalls: [] })));
+    const events = await collect(stream(model, tools(), { instruction: "", ask: asked("q"), endings: ANSWER_SHAPES }));
+    expect(done(events).text).not.toMatch(/<invoke/);
+  });
+
+  it("stops bouncing invalid answers once past the ceiling", async () => {
+    const invalid = { text: "draft", toolCalls: [call("x", "answer_comparison", { title: "t" })] };
+    const { model, requests } = scripted(...Array.from({ length: 20 }, () => invalid));
+    const events = await collect(stream(model, tools(), { instruction: "", ask: asked("q"), endings: ANSWER_SHAPES, maxRounds: 3 }));
+    expect(requests.length).toBeLessThanOrEqual(6);
+    expect(done(events)).toMatchObject({ shape: "reply", cutShort: true });
+  });
 });

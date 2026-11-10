@@ -53,6 +53,11 @@ describe("recall", () => {
     expect(context).toMatch(/no earlier exchanges match/);
   });
 
+  it("finds an earlier conversation however the person phrases it", () => {
+    const { context } = recall.recall("Remind me which CRMs we were looking at", "current", NOW, IST);
+    expect(context).toContain("Person asked: Shortlist CRM tools for a 20-person sales team");
+  });
+
   it("stays out of the way when the message does not look back", () => {
     const { context, activity } = recall.recall("What's the latest Node LTS?", "current", NOW, IST);
     expect(activity).toEqual([]);

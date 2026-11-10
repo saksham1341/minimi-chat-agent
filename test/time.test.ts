@@ -10,7 +10,7 @@ const day = (text: string, now = NOW, tz = IST) => resolveTimeRefs(text, now, tz
 describe("resolveTimeRefs", () => {
   it("reads the three questions from the brief", () => {
     expect(day("On Monday we shortlisted 5 CRM tools")).toEqual(["2026-11-09"]);
-    expect(day("What did I ask you on 3 November? Is your answer still correct today?")).toEqual(["2026-11-03", "2026-11-10"]);
+    expect(day("What did I ask you on 3 November? Is your answer still correct today?")).toEqual(["2026-11-03"]);
     expect(day("Last Tuesday I asked you about Postgres hosting")).toEqual(["2026-11-03"]);
   });
 
@@ -47,5 +47,22 @@ describe("resolveTimeRefs", () => {
   it("ignores the future and plain numbers", () => {
     expect(day("next Monday")).toEqual([]);
     expect(day("a team of 20 people, 5 tools")).toEqual([]);
+  });
+
+  it("does not read names or other words as dates", () => {
+    expect(day("Has Monday.com changed its pricing?")).toEqual([]);
+    expect(day("I may 3 options to compare")).toEqual([]);
+    expect(day("Is your answer still correct today?")).toEqual([]);
+  });
+
+  it("reads 'today' when it is about the conversation", () => {
+    expect(day("What did I ask you today?")).toEqual(["2026-11-10"]);
+  });
+
+  it("reads the weekend and the other day", () => {
+    const [weekend] = resolveTimeRefs("we talked over the weekend", NOW, IST);
+    expect(isoDay(dateIn(weekend.from, IST))).toBe("2026-11-07");
+    expect(weekend.to.getTime() - weekend.from.getTime()).toBe(2 * 24 * 3600 * 1000);
+    expect(day("the other day you said")).toEqual(["2026-11-04"]);
   });
 });

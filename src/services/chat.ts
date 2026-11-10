@@ -34,6 +34,8 @@ export type TurnEvent =
   | { type: "text"; text: string }
   /** The model stopped talking to search; what it said so far was a note, not the answer. */
   | { type: "searching" }
+  /** Discard the text streamed this round: it was not an answer. */
+  | { type: "retract" }
   | { type: "shape"; shape: string; partial: unknown }
   | { type: "done"; turn: TurnRecord; cutShort: boolean }
   | { type: "error"; message: string };
@@ -125,7 +127,10 @@ export class ChatService {
         endings: answerShapes(() => tool.sources),
         signal: input.signal,
       })) {
-        if (event.type === "delta") {
+        if (event.type === "retract") {
+          spoke = "";
+          out.push({ type: "retract" });
+        } else if (event.type === "delta") {
           const d = event.delta;
           if (d.type === "text") {
             spoke += d.text;
