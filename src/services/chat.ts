@@ -15,7 +15,8 @@ import { asked } from "../agents/conversation.ts";
 import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, stream } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
-import { answerShapes } from "../domain/answers.ts";
+import { answerShapes, collectRefs } from "../domain/answers.ts";
+import { bareCitations, citationsIn, describeProblems, malformedCitations, markUnverified, quoteFound, quoteProblems } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
 import type { Clock } from "../ports/clock.ts";
@@ -125,7 +126,8 @@ export class ChatService {
       at: now.toISOString(),
       question: message,
       answerText: answerAsText(shape, text, answer),
-      lead: (answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(),
+      // What still does not hold up after the retry is shown marked, never silently.
+      lead: markUnverified((answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(), tool.snapshots),
       shape,
       ...(answer === undefined ? {} : { answer }),
       sources: tool.sources,
@@ -143,7 +145,17 @@ export class ChatService {
         instruction: INSTRUCTION,
         ask,
         history: store.transcript(conversation.id),
-        endings: answerShapes(() => tool.sources),
+        endings: answerShapes(() => tool.sources, () => tool.snapshots),
+        // Prose quotes are checked against what each source actually said; a miss goes back once.
+        checkReply: (text) => {
+          // Proportionate: a citation standing in for the fact, a malformed one or an unknown source
+          // always goes back; one or two quotes that miss are cheaper shown flagged than rewritten.
+          const misses = quoteProblems(citationsIn(text), tool.snapshots);
+          const structural = [...misses.filter((p) => p.reason === "unknown source"), ...malformedCitations(text), ...bareCitations(text)];
+          const quoteMisses = misses.filter((p) => p.reason !== "unknown source");
+          const problems = structural.length || quoteMisses.length > 2 ? [...structural, ...quoteMisses] : [];
+          return problems.length ? describeProblems(problems) : null;
+        },
         // The re-reads are done, so a re-check gets one round for gaps and then answers.
         ...(prefetched ? { maxRounds: 2 } : {}),
         signal: input.signal,
@@ -171,9 +183,10 @@ export class ChatService {
           if (event.entry.kind === "ran") toolMs += now - mark;
           mark = now;
         } else {
-          const turn = record(event.shape, event.text, event.answer);
+          const turn = record(event.shape, event.text, markCardQuotes(event.answer, tool.snapshots));
           store.append(conversation.id, [ask, ...fresh]);
           store.saveTurn(turn);
+          store.saveSnapshots(turn, tool.snapshots);
           store.touch(conversation.id, clock.now());
           out.push({ type: "done", turn, cutShort: event.cutShort });
           const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
@@ -204,4 +217,23 @@ export class ChatService {
 function titleFrom(message: string): string {
   const line = message.split("\n")[0].trim();
   return line.length > 60 ? `${line.slice(0, 57).trimEnd()}…` : line;
+}
+
+/**
+ * Flags each quoted source entry in a card as verified or not, for the screen. And a verdict with
+ * nothing behind it is unverified by definition: "unchanged" citing no source is shown as such.
+ */
+function markCardQuotes(answer: unknown, snapshots: ReadonlyMap<string, string>): unknown {
+  for (const item of (answer as { items?: { status: string; sources: unknown[]; note?: string }[] } | undefined)?.items ?? []) {
+    if (item.status === "unchanged" && !item.sources.length) {
+      item.status = "unverified";
+      item.note = item.note ? `${item.note} (no source re-read this)` : "No source re-read this.";
+    }
+  }
+  for (const ref of collectRefs(answer)) {
+    if (typeof ref === "string") continue;
+    const snapshot = snapshots.get(ref.id);
+    ref.verified = snapshot !== undefined && quoteFound(ref.quote, snapshot);
+  }
+  return answer;
 }

@@ -7,8 +7,8 @@ import { Cite, formatDay, Prose } from "./Prose.tsx";
 
 type Partial<T> = { [K in keyof T]?: T[K] extends (infer U)[] ? Partial<U>[] : T[K] };
 
-interface ComparisonData { title: string; columns: string[]; rows: { name: string; url?: string; cells: string[]; sources: string[] }[]; takeaway: string }
-interface ChangesData { title: string; since: string; items: { subject: string; status: "changed" | "unchanged" | "corrected" | "new" | "unverified"; before?: string; now?: string; note?: string; sources: string[] }[]; summary: string }
+interface ComparisonData { title: string; columns: string[]; rows: { name: string; url?: string; cells: string[]; sources: Ref[] }[]; takeaway: string }
+interface ChangesData { title: string; since: string; items: { subject: string; status: "changed" | "unchanged" | "corrected" | "new" | "unverified"; before?: string; now?: string; note?: string; sources: Ref[] }[]; summary: string }
 interface ChoicesData { question: string; options: { label: string; reply: string }[] }
 
 export function Artifact(props: { shape: string; answer: unknown; sources: Source[]; live: boolean; onPick: (reply: string) => void; canPick: boolean }) {
@@ -19,12 +19,19 @@ export function Artifact(props: { shape: string; answer: unknown; sources: Sourc
   return null;
 }
 
-const Chips = ({ ids, sources }: { ids?: string[]; sources: Source[] }) =>
+type Ref = string | { id?: string; quote?: string; verified?: boolean };
+
+/** A card's source entries as citation chips: plain ids, or ids with the words they rest on. */
+const Chips = ({ ids, sources }: { ids?: Ref[]; sources: Source[] }) =>
   ids?.length ? (
     <span className="chips">
-      {ids.filter(Boolean).map((id) => (
-        <Cite key={id} id={id} sources={sources} />
-      ))}
+      {ids.map((ref, i) =>
+        typeof ref === "string" ? (
+          <Cite key={`${ref}-${i}`} id={ref} sources={sources} />
+        ) : ref?.id ? (
+          <Cite key={`${ref.id}-${i}`} id={ref.id} sources={sources} quote={ref.quote} verified={ref.verified} />
+        ) : null,
+      )}
     </span>
   ) : null;
 

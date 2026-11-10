@@ -20,5 +20,7 @@ export interface MemoryStore {
   searchTurns(terms: string[], limit: number, excludeConversation?: string): TurnRecord[];
 
   saveClaims(turn: TurnRecord, claims: ClaimDraft[]): void;
+  /** The exact text each source showed the model for this turn: the evidence as it stood that day. */
+  saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>): void;
   claimsFor(turnIds: string[]): Claim[];
 }

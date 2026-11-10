@@ -8,7 +8,7 @@ import type { ClaimDraft, TurnRecord } from "../domain/memory.ts";
 import type { ClaimExtractor } from "../ports/claims.ts";
 import type { MemoryStore } from "../ports/memory.ts";
 import type { z } from "zod";
-import type { Changes, Comparison } from "../domain/answers.ts";
+import { refId, type Changes, type Comparison, type SourceRef } from "../domain/answers.ts";
 
 export class LedgerService {
   constructor(private readonly store: MemoryStore, private readonly extractor: ClaimExtractor) {}
@@ -20,18 +20,24 @@ export class LedgerService {
   }
 
   private async claimsOf(turn: TurnRecord): Promise<ClaimDraft[]> {
-    const url = (ids: string[]) => turn.sources.find((s) => ids.includes(s.id))?.url;
+    // The first source entry with a quote is the one the fact rests on.
+    const evidence = (refs: SourceRef[]) => {
+      const quoted = refs.find((r): r is Exclude<SourceRef, string> => typeof r !== "string" && !!r.quote);
+      const id = quoted ? quoted.id : refs.map(refId)[0];
+      return { sourceUrl: turn.sources.find((s) => s.id === id)?.url, ...(quoted ? { quote: quoted.quote } : {}) };
+    };
     if (turn.shape === "comparison") {
       const c = turn.answer as z.infer<typeof Comparison>;
       return c.rows.flatMap((row) =>
-        c.columns.map((column, i) => ({ subject: `${row.name}, ${column}`, value: row.cells[i] ?? "n/a", sourceUrl: url(row.sources) })),
+        c.columns.map((column, i) => ({ subject: `${row.name}, ${column}`, value: row.cells[i] ?? "n/a", ...evidence(row.sources) })),
       );
     }
     if (turn.shape === "changes") {
       const c = turn.answer as z.infer<typeof Changes>;
-      return c.items.filter((i) => i.now).map((i) => ({ subject: i.subject, value: i.now!, sourceUrl: url(i.sources) }));
+      return c.items.filter((i) => i.now).map((i) => ({ subject: i.subject, value: i.now!, ...evidence(i.sources) }));
     }
     if (turn.shape === "choices" || !this.extractor.available || !turn.answerText.trim()) return [];
-    return this.extractor.extract({ question: turn.question, answer: turn.answerText, sources: turn.sources });
+    // The lead keeps its quoted citations, so each extracted fact can carry the words it came from.
+    return this.extractor.extract({ question: turn.question, answer: turn.lead || turn.answerText, sources: turn.sources });
   }
 }

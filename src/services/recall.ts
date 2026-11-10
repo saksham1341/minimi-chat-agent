@@ -127,7 +127,10 @@ function describeTurn(turn: TurnRecord, currentConversation: string, claims: Cla
   ];
   if (claims.length) {
     out.push("Facts you stated then (re-check these if asked whether the answer still holds):");
-    for (const c of claims.slice(0, 60)) out.push(`  - ${c.subject}: ${c.value}${c.sourceUrl ? ` (source: ${c.sourceUrl})` : ""}`);
+    for (const c of claims.slice(0, 60)) {
+      const where = c.sourceUrl ? ` (source: ${c.sourceUrl}${c.quote ? `, which said then: "${c.quote}"` : ""})` : "";
+      out.push(`  - ${c.subject}: ${c.value}${where}`);
+    }
   }
   return out;
 }

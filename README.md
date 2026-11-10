@@ -1,59 +1,46 @@
-# A chat agent with one tool, and a memory that knows what day it is
+# A chat agent that knows what day it is, and shows its evidence
 
 ```bash
-cp .env.example .env    # add a model key (Anthropic or Bedrock) and a search key (Exa or Tavily)
+cp .env.example .env    # a model (Anthropic API or AWS Bedrock) and a search key (Exa or Tavily)
 npm install
-npm start               # http://localhost:3000
+npm start               # http://localhost:3000  (HOST=0.0.0.0 to open it to your network)
 ```
 
-Node 22.13 or newer. Every key it can use is listed in `.env.example`; the server says at startup which ones it found.
+Node 22.13+. Every variable it reads is in `.env.example`; startup prints what it found.
 
 ## How it works
 
-The test questions are not really search questions. "On Monday we shortlisted 5 CRM tools", "what did I ask you on 3 November?", "last Tuesday I asked about Postgres hosting": each one needs **a date, a memory of what was said on that date, and fresh searches against exactly what was said**. The design follows from that.
+The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?") need **a date, a memory of what was said that day, and evidence about now**. A turn (`src/services/chat.ts`):
 
-A turn runs in four steps (`src/services/chat.ts`):
+1. **Recall, in code, before the model.** "Monday", "3 November", "last Tuesday" become instants in the person's time zone (`domain/time.ts`, tested). Those days' exchanges and a full-text topic match (SQLite FTS5) go into a `<context>` block on the message, with the facts stated then and the source words each came from. If nothing matches, the block says so, so the agent does not invent a past.
+2. **Re-checks start with the work done.** When an earlier answer's facts are recalled, the harness plans from its ledger one live re-read per source site, plus one "announcements since" search per vendor. These run in parallel before the model's first token.
+3. **The loop** (`agents/loop.ts`, ported from my framework Keel). The model's one tool, `web_search`, comes over MCP from the search service. Parallel calls return in one message, failures come back as results, and there is a round budget with a hard cap. A tool call written as text is caught and redone.
+4. **Answers have shapes.** Plain prose, or a comparison, a what-changed report or a clarifying question. Those are tool calls whose schema-checked arguments are the answer, each with a `headline`. They stream into a live canvas.
+5. **Citations are quotes, and the harness checks them.** The model cites with the exact words it relied on, `[S1 "$1.50/branch-month"]`, several per claim if several sources agree. The harness keeps each source's text as a snapshot and checks every quote against it. Malformed citations, or ones standing in for the fact, go back to the model once. A few misses are shown flagged rather than rewritten. A "changed" or "corrected" verdict must cite a page read live, found on the vendor's own site, or published after the baseline.
+6. **The ledger** stores each stated fact with its source, quote and date, so the next "is it still correct?" compares words, not memories.
 
-1. **Recall, before the model is called.** Code, not the model, resolves "Monday", "3 November" and "last Tuesday" into instants in the person's time zone (`src/domain/time.ts`). It biases to the past and names both readings when "last Monday" is ambiguous. It reads the conversations from those days and full-text matches the topic (SQLite FTS5), then writes the result into a `<context>` block on the message: the current time, the resolved dates, what was asked and answered, and the facts stated then. This takes milliseconds.
-2. **The loop.** The model searches and answers. Its one tool reaches it over MCP: the search service is an MCP server at `/mcp` in the same process, and the runtime is an MCP client that knows no tool by name. Several searches in one turn run in parallel, and all their results go back in one message. A failed search comes back as a failed result rather than vanishing. After a fixed number of rounds the search tool is withdrawn and the model is told to answer with what it has. Results are numbered per answer (`[S1]`…) so every fact can be cited and checked.
-3. **An answer has a shape.** Plain text is a reply. A comparison of three or more options, a "what changed since" report and a clarifying question are tools whose arguments *are* the answer. Each opens with a one-line `headline` (the conclusion), and anything the model said before calling one is treated as a working note, not the answer. The provider checks them against a schema, they stream in, and the UI draws each as its own card. The harness also enforces one rule it can check itself: a "changed" verdict must cite a source that is a live page or dated after the baseline. A page from before can't show a change, so the answer is sent back to be fixed. And "corrected" exists for when the earlier answer was simply wrong.
-4. **The ledger, after the answer is on screen.** The facts the answer stated (prices, limits, dates) are recorded with their source and the time they were seen. Structured answers already are claims; prose goes through a small model in the background. So "is your answer still correct?" becomes a list of specific facts to re-check, with `since` set to the day they were stated.
+## Why
 
-On a wide screen a **canvas** beside the chat shows the work as it happens: the step (remember, search, read, write), what was recalled and the facts stated then, each search as a lane with its sources landing in it, then the card filling in cell by cell. The model's time doesn't shrink, but something real is on screen from the first couple of seconds. Each turn logs where its time went (model rounds versus searches), because those are different problems with different fixes.
+- **Compute what is computable; leave judgement to the model.** Dates, recall, quote matching, evidence dates and re-read planning have right answers, so code does them in milliseconds, and tests check them. Whether something changed is the model's call, within those checks.
+- **Ports and adapters** (Keel's layering). The runtime (`agents/`) imports nothing of the app. Then `domain/` (no I/O), `ports/` + `adapters/` (Bedrock, Anthropic, Exa, Tavily, SQLite), `services/`, thin `api/` (HTTP for people, MCP for agents) and `assembly.ts`. A test enforces the import direction. A missing key is a named adapter that refuses honestly.
+- **Tools over MCP** means the agent's capabilities are whatever server `MCP_ENDPOINT` names: this process by default, at a cost of milliseconds.
+- **The model picker is the adapter list.** Models are registered only when their keys are set, and switching models mid-conversation is safe.
 
-## Why it's built this way
-
-- **Memory is the harness's job, not a tool.** A `recall` tool would cost a full model round trip (a second or more) before the agent even knows whether there is anything to remember. Resolving "last Tuesday" is also arithmetic with one right answer. So the mechanical part runs every turn, and the judgement (what the person meant, whether it still holds) stays with the model. The model's only tool is `web_search`, as the brief asks.
-- **Ports and adapters** (from Keel, my own agent framework, ported from Python):
-  - `agents/` is the runtime: the loop and model adapters. It imports nothing of the app.
-  - `domain/` holds rules with no I/O, and `ports/` + `adapters/` hold everything outside the process.
-  - `services/` holds the operations, `api/` holds the thin interfaces (HTTP for people, MCP for agents), and `assembly.ts` is the one place that reads the environment.
-  - A test (`test/layers.test.ts`) fails if a layer imports the wrong way.
-  - A missing key is a named adapter that refuses honestly (`AbsentSearch`), never a `null` and an `if`.
-- **Tools as a service over MCP.** The runtime reaches web search the way it would reach any tool server, so the agent's capabilities are whatever server `MCP_ENDPOINT` names (by default, this process). The search service can be swapped, or reused by another agent, without touching the loop. In-process the hop costs milliseconds against seconds of model and search time, and `/mcp` answers only loopback unless `MCP_ALLOW_REMOTE=true`.
-- **The model picker is the adapter list.** Anthropic (Opus, Sonnet and Haiku 5.5) and Bedrock (Sonnet 4.5) are adapters on one port, registered only when their keys are set. Each adapter replays its own reasoning blocks and rebuilds turns another provider wrote, so switching models mid-conversation is safe.
-- **Fast where people notice:**
-  - Tokens stream to the screen.
-  - Searches run in parallel and repeated queries are cached.
-  - The system prompt never changes (the date lives in the message), so it stays in the prompt cache.
-  - Reasoning effort is low by default. On Bedrock that means thinking off, measured at about 1.8 s to first token against 2.5–5.4 s with it.
-- **Exa by default.** It filters by published date ("since Monday"), returns page text in the same call, and can re-read a page live. Live re-reads matter because pricing pages change in place and carry no date: the agent is told to use `since` for announcements and `fresh` for current prices.
-- **Honest by construction.** If memory has nothing for "3 November", the context says so, and the agent says so too instead of inventing a conversation.
+Measured on Sonnet 4.5 via Bedrock: plain answers 5–10 s; searched answers 15–28 s, text from about 7 s. A re-check is about 40 s, most of it the model writing the card, but its re-reads land on screen within a second.
 
 ## Considered and rejected
 
-- **A recall tool, or a router model that picks one.** Each adds a model call before the first useful token, and the date math is deterministic anyway.
-- **An LLM to parse dates.** It is slower and sometimes wrong about weekdays. The parser is about 200 lines and unit-tested on the brief's own phrasings.
-- **Embeddings for memory.** Questions name products and days, which FTS5 and date ranges match exactly. Vectors would add a dependency and a model for no gain at this scale.
-- **Every answer as JSON.** Chat should stream as prose. Only answers whose structure helps the reader are shapes.
-- **An SDK tool runner or agent framework.** The loop's invariants (one message per parallel round, failures returned, a ceiling, endings) fail quietly if a library decides them, so they are about 180 lines here, with tests.
-- **More thinking on re-checks.** Tried it: it added 15–20 s to a re-check and didn't change the verdict. The evidence rule in the harness was what fixed wrong "changed" calls.
-- **Porting all of Keel.** Tenancy, proposals, jobs and versioning are for multi-user systems. Only its layering and rules came over.
+- **A recall tool or a router model.** Either adds a model round before anything useful, for arithmetic.
+- **An LLM to parse dates.** Slower, and wrong about weekdays.
+- **Embeddings.** Questions name products and days, which FTS and date ranges match exactly.
+- **Provider-native citations.** Claude-only, and uncertain on Bedrock's older API version. Checked quotes work with any model.
+- **More thinking on re-checks.** Tried it: +15–20 s and the same verdict. The harness's evidence rules fixed the false "changed" calls.
+- **All of Keel.** Tenancy, proposals and jobs are for multi-user systems; only the layering and its rules came over.
 
 ## With another week
 
-- **Evals.** About 50 dated multi-session scripts, like the brief's examples, run against a frozen clock, graded on whether the date was resolved, the memory found and the claims re-checked. Every prompt or model change would be measured against them.
-- **Proactive re-checks.** A daily job that re-verifies stored claims and opens the next conversation with "Neon cut its Launch price since we talked".
-- **Page fetching for long documents** (pricing PDFs, changelogs), behind the same tool.
-- **Per-person memory and auth.** Today it is one person per server.
-- **Conversation compaction** for very long threads.
+- **Evals:** dated multi-session scripts on a frozen clock, scoring date resolution, recall, quote validity and verdicts.
+- **A faster model for writing cards**, routed per shape.
+- **Scheduled re-checks of the ledger.**
+- **Sign-in and per-person memory.**
+- **Conversation compaction.**

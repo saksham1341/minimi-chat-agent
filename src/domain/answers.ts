@@ -12,10 +12,20 @@
 import { z } from "zod";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
+import { describeProblems, quoteProblems, type QuoteProblem } from "./quotes.ts";
 
 const sourceIds = z
-  .array(z.string())
-  .describe('Ids of the search results that back this, e.g. ["S2", "S5"]. Empty only if it comes from memory.');
+  .array(
+    z.union([
+      z.object({ id: z.string().describe("A search result id, e.g. S2."), quote: z.string().describe("The exact words from that result this rests on.") }),
+      z.string(),
+    ]),
+  )
+  .describe('The search results that back this, each with the exact words it rests on: [{"id": "S2", "quote": "…"}]. Empty only if it comes from memory.');
+
+/** A card's source entry, either form. */
+export type SourceRef = string | { id: string; quote: string; verified?: boolean };
+export const refId = (ref: SourceRef) => (typeof ref === "string" ? ref : ref.id);
 
 export const Comparison = z.object({
   headline: z
@@ -112,7 +122,7 @@ export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Sourc
       problems.push(`"${item.subject}" is marked ${item.status} but cites no source`);
       continue;
     }
-    const cited = item.sources.map((id) => sources.find((s) => s.id === id)).filter((s): s is Source => !!s);
+    const cited = item.sources.map((ref) => sources.find((s) => s.id === refId(ref))).filter((s): s is Source => !!s);
     if (cited.length && !cited.some(shows)) {
       problems.push(`"${item.subject}" is marked ${item.status}, but none of its sources shows what is true now: ${cited.map(describe).join(", ")}`);
     }
@@ -122,23 +132,47 @@ export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Sourc
     : null;
 }
 
-/** The answer shapes for one turn. `sources` is that turn's numbered results, for the evidence rule. */
-export function answerShapes(sources: () => Source[] = () => []): OutputShape[] {
+/** Quotes in a card's source entries that are not in their snapshots. */
+export function cardQuoteProblems(answer: unknown, snapshots: ReadonlyMap<string, string>): QuoteProblem[] {
+  const refs = collectRefs(answer).filter((r): r is Exclude<SourceRef, string> => typeof r !== "string");
+  return quoteProblems(refs.map((r) => ({ id: r.id, quote: r.quote })), snapshots);
+}
+
+/** Every source entry in a card, wherever it sits. */
+export function collectRefs(answer: unknown): SourceRef[] {
+  const a = answer as { rows?: { sources?: SourceRef[] }[]; items?: { sources?: SourceRef[] }[] } | undefined;
+  return [...(a?.rows ?? []), ...(a?.items ?? [])].flatMap((x) => x.sources ?? []);
+}
+
+/** The answer shapes for one turn: its numbered results and their snapshots feed the checks. */
+export function answerShapes(sources: () => Source[] = () => [], snapshots?: () => ReadonlyMap<string, string>): OutputShape[] {
+  // A failing quote in a card goes back once, like prose; after that the card is shown with the
+  // quote marked unverified rather than bounced until the round budget runs out.
+  let quoteBounces = 0;
+  const quotesHold = (answer: unknown) => {
+    if (!snapshots || quoteBounces >= 1) return null;
+    // Same proportion as prose: a couple of misses are shown flagged; more means a sloppy card.
+    const problems = cardQuoteProblems(answer, snapshots());
+    if (problems.length <= 2) return null;
+    quoteBounces++;
+    return describeProblems(problems).replace("give the whole answer again", "call the answer shape again");
+  };
   return [
     shape(
       "comparison",
       Comparison,
       "Answer with a comparison table, ending the turn. Use when the person is weighing three or more options on the " +
         "same attributes (tools, plans, providers). Do the searches first; every cell should be backed by a source.",
+      ((value: z.infer<typeof Comparison>) => quotesHold(value)) as Check,
     ),
     shape(
       "changes",
       Changes,
       "Answer with a what-changed report against an earlier answer, ending the turn. Use when the person asks whether " +
-        "something you told them before is still true, or what changed since a date. One item per product or option, " +
-        "covering all its facts (not one item per attribute); leave `note` empty when nothing changed; " +
+        "something you told them before is still true, or what changed since a date. Cover every option from the earlier " +
+        "answer, one item per option with all its facts (not one item per attribute); leave `note` empty when nothing changed; " +
         "mark 'unverified' honestly when the search could not confirm it either way.",
-      ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources())) as Check,
+      ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources()) ?? quotesHold(value)) as Check,
     ),
     shape(
       "choices",

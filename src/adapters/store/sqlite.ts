@@ -31,6 +31,10 @@ create table if not exists claims (
   value text not null, source_url text, observed_at text not null
 );
 create index if not exists claims_turn on claims(turn_id);
+create table if not exists snapshots (
+  turn_id text not null, source_id text not null, url text not null, text text not null, seen_at text not null,
+  primary key (turn_id, source_id)
+);
 `;
 
 type Row = Record<string, unknown>;
@@ -43,6 +47,9 @@ export class SqliteMemory implements MemoryStore {
     this.db = new DatabaseSync(path);
     this.db.exec("pragma journal_mode = wal;");
     this.db.exec(SCHEMA);
+    // Added after the first release: an existing memory file gains the column in place.
+    const columns = (this.db.prepare("pragma table_info(claims)").all() as Row[]).map((c) => c.name);
+    if (!columns.includes("quote")) this.db.exec("alter table claims add column quote text");
   }
 
   createConversation(title: string, at: Date): Conversation {
@@ -115,8 +122,18 @@ export class SqliteMemory implements MemoryStore {
   }
 
   saveClaims(turn: TurnRecord, claims: ClaimDraft[]) {
-    const insert = this.db.prepare("insert into claims values (?, ?, ?, ?, ?, ?, ?)");
-    for (const c of claims) insert.run(randomUUID(), turn.id, turn.conversationId, c.subject, c.value, c.sourceUrl ?? null, turn.at);
+    const insert = this.db.prepare(
+      "insert into claims (id, turn_id, conversation_id, subject, value, source_url, observed_at, quote) values (?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const c of claims) insert.run(randomUUID(), turn.id, turn.conversationId, c.subject, c.value, c.sourceUrl ?? null, turn.at, c.quote ?? null);
+  }
+
+  saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>) {
+    const insert = this.db.prepare("insert or replace into snapshots values (?, ?, ?, ?, ?)");
+    for (const source of turn.sources) {
+      const text = texts.get(source.id);
+      if (text) insert.run(turn.id, source.id, source.url, text, turn.at);
+    }
   }
 
   claimsFor(turnIds: string[]): Claim[] {
@@ -131,6 +148,7 @@ export class SqliteMemory implements MemoryStore {
       subject: r.subject as string,
       value: r.value as string,
       sourceUrl: (r.source_url as string | null) ?? undefined,
+      quote: (r.quote as string | null) ?? undefined,
       observedAt: r.observed_at as string,
     }));
   }

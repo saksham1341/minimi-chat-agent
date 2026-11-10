@@ -21,8 +21,7 @@ export const SEARCH_TOOL = {
   name: "web_search",
   description:
     "Search the web. Returns numbered results ([S1], [S2]...) with title, URL, published date when known, and the " +
-    "passages that match. Cite them by id in your answer. Make several calls in the same turn to cover several " +
-    "entities or angles at once; they run in parallel.\n\n" +
+    "text of each page; the numbers are what you cite. Several calls in one turn run in parallel.\n\n" +
     "`since` keeps only pages published on or after a day. Use it for news, announcements and changelogs since an " +
     "earlier date. Do not use it to find current prices: pricing pages change in place and rarely carry a date, so " +
     "`since` hides them. For a current price, search the vendor's pricing page with `domains` and `fresh: true`.\n\n" +
@@ -86,6 +85,8 @@ export interface SearchPayload {
 
 export class CitedSearch implements ToolSurface {
   readonly sources: Source[] = [];
+  /** The exact text each source showed the model: what its quotes are checked against. */
+  readonly snapshots = new Map<string, string>();
   private readonly byUrl = new Map<string, Source>();
 
   constructor(
@@ -125,6 +126,11 @@ export class CitedSearch implements ToolSurface {
       return result;
     }
     const numbered = hits.map((hit) => ({ hit, source: this.number(hit, args) }));
+    for (const { hit, source } of numbered) {
+      // A page read twice keeps both readings: a quote from either one is a quote from the page.
+      const before = this.snapshots.get(source.id);
+      this.snapshots.set(source.id, before && !before.includes(hit.excerpt) ? `${before}\n\n${hit.excerpt}` : before ?? hit.excerpt);
+    }
     this.report({ ...activity, results: hits.length, hits: numbered.map((n) => n.source.id) }, this.sources);
 
     if (!numbered.length) {

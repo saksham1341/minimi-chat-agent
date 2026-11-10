@@ -5,18 +5,33 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Source } from "../api.ts";
 
-const CITE = /\[(S\d+(?:\s*,\s*S\d+)*)\]/g;
+/** `[S3]`, `[S3 "exact words"]`, `[S3 !"words not found in the source"]`, `[S1, S3]`. */
+const MARKER = /\[(S\d+)(?:\s+(!?)"((?:[^"\\]|\\.)*)")?((?:\s*,\s*S\d+)*)\]/g;
 
-/** "[S1, S3]" → "[S1](#cite-S1)[S3](#cite-S3)", so the markdown renderer hands each to <Cite>. */
-const linkCitations = (text: string) =>
-  text.replace(CITE, (_, ids: string) =>
-    ids
-      .split(",")
-      .map((id) => `[${id.trim()}](#cite-${id.trim()})`)
-      .join(""),
-  );
+interface Quote {
+  quote?: string;
+  verified?: boolean;
+}
+
+/**
+ * Each marker becomes a link the renderer hands to <Cite>, carrying an index into `quotes` for its
+ * quoted words. A marker still being typed at the end of a streaming answer is hidden, so the
+ * screen never shows half a quote.
+ */
+const linkCitations = (text: string, quotes: Quote[]) =>
+  text
+    .replace(/\[S\d+[^\]\n]*$/, "")
+    .replace(MARKER, (_m, id: string, bang: string, quote: string | undefined, rest: string) => {
+      const i = quotes.push(quote === undefined ? {} : { quote: quote.replace(/\\(.)/g, "$1"), verified: bang !== "!" }) - 1;
+      const more = (rest ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+      return [`[${id}](#cite-${id}-${i})`, ...more.map((x) => `[${x}](#cite-${x})`)].join("");
+    })
+    // Anything else that names a source in brackets still reads as a citation, never as raw text.
+    .replace(/\[(S\d+)\b[^\]\n]*\](?!\()/g, (_m, id: string) => `[${id}](#cite-${id})`);
 
 export function Prose({ text, sources, className }: { text: string; sources: Source[]; className?: string }) {
+  const quotes: Quote[] = [];
+  const linked = linkCitations(text, quotes);
   return (
     <div className={className ?? "prose"}>
       <Markdown
@@ -24,7 +39,7 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
         components={{
           a: ({ href, children }) =>
             href?.startsWith("#cite-") ? (
-              <Cite id={href.slice(6)} sources={sources} />
+              <Cite id={href.slice(6).split("-")[0]} sources={sources} {...(quotes[Number(href.split("-")[2])] ?? {})} />
             ) : (
               <a href={href} target="_blank" rel="noreferrer noopener">
                 {children}
@@ -32,7 +47,7 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
             ),
         }}
       >
-        {linkCitations(text)}
+        {linked}
       </Markdown>
     </div>
   );
@@ -43,7 +58,7 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
  * source: site, title, date and the passage the answer drew on. On a touch screen, where there is
  * no hover, a tap opens the same preview as a bottom sheet with a button to open the page.
  */
-export function Cite({ id, sources }: { id: string; sources: Source[] }) {
+export function Cite({ id, sources, quote, verified }: { id: string; sources: Source[]; quote?: string; verified?: boolean }) {
   const source = sources.find((s) => s.id === id);
   const key = useId();
   const open = useSyncExternalStore(preview.subscribe, () => preview.current?.key === key);
@@ -51,12 +66,12 @@ export function Cite({ id, sources }: { id: string; sources: Source[] }) {
   const pointer = useRef<string>("mouse");
   if (!source) return <span className="cite cite-missing">{id.slice(1)}</span>;
 
-  const show = (mode: Mode) => anchor.current && preview.show({ key, source, rect: anchor.current.getBoundingClientRect(), mode });
+  const show = (mode: Mode) => anchor.current && preview.show({ key, source, quote, verified, rect: anchor.current.getBoundingClientRect(), mode });
   return (
     <>
       <a
         ref={anchor}
-        className={`cite${open ? " is-open" : ""}`}
+        className={`cite${open ? " is-open" : ""}${verified === false ? " is-unverified" : ""}`}
         href={source.url}
         target="_blank"
         rel="noreferrer noopener"
@@ -88,6 +103,8 @@ type Mode = "hover" | "sheet";
 interface Shown {
   key: string;
   source: Source;
+  quote?: string;
+  verified?: boolean;
   rect: DOMRect;
   mode: Mode;
 }
@@ -129,7 +146,7 @@ const preview = (() => {
   return api;
 })();
 
-function Preview({ source, rect, mode }: Shown) {
+function Preview({ source, quote, verified, rect, mode }: Shown) {
   const body = (
     <>
       <span className="preview-site">
@@ -138,7 +155,16 @@ function Preview({ source, rect, mode }: Shown) {
         {source.published && <span className="preview-date">{formatDay(source.published)}</span>}
       </span>
       <span className="preview-title">{source.title}</span>
-      {source.snippet && <span className="preview-snippet">{source.snippet}</span>}
+      {quote ? (
+        <>
+          <span className="preview-quote">“{quote}”</span>
+          <span className={`preview-check${verified === false ? " is-bad" : ""}`}>
+            {verified === false ? "This quote wasn't found on the page; treat the claim as unverified." : "Quoted from the page as it read when answered."}
+          </span>
+        </>
+      ) : (
+        source.snippet && <span className="preview-snippet">{source.snippet}</span>
+      )}
     </>
   );
 

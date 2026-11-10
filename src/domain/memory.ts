@@ -57,7 +57,9 @@ export interface Claim {
   subject: string; // "Neon, Launch plan"
   value: string; // "$19/month, 10 GB storage"
   sourceUrl?: string;
+  /** The source's exact words the fact rested on, as they read that day: the snapshot to compare against later. */
+  quote?: string;
   observedAt: string; // ISO instant the answer was given
 }
 
-export type ClaimDraft = Pick<Claim, "subject" | "value" | "sourceUrl">;
+export type ClaimDraft = Pick<Claim, "subject" | "value" | "sourceUrl" | "quote">;

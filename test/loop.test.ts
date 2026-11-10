@@ -125,4 +125,13 @@ describe("the loop", () => {
     expect(requests.length).toBeLessThanOrEqual(6);
     expect(done(events)).toMatchObject({ shape: "reply", cutShort: true });
   });
+
+  it("sends an answer whose citations do not hold up back once, then accepts", async () => {
+    const { model, requests } = scripted({ text: "first", toolCalls: [] }, { text: "second", toolCalls: [] }, { text: "third", toolCalls: [] });
+    const checkReply = (text: string) => (text === "third" ? null : "a quote is not in its source");
+    const events = await collect(stream(model, tools(), { instruction: "", ask: asked("q"), checkReply }));
+    expect(requests).toHaveLength(2);
+    expect(events.some((e) => e.type === "retract")).toBe(true);
+    expect(done(events).text).toBe("second");
+  });
 });

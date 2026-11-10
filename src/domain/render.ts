@@ -1,8 +1,13 @@
 /** A structured answer as plain text: what full-text recall matches and the next turn quotes. */
 import type { z } from "zod";
 import type { Changes, Choices, Comparison } from "./answers.ts";
+import { withoutQuotes } from "./quotes.ts";
 
 export function answerAsText(shape: string, text: string, answer?: unknown): string {
+  return withoutQuotes(render(shape, text, answer));
+}
+
+function render(shape: string, text: string, answer?: unknown): string {
   const lead = text.trim();
   if (shape === "comparison") {
     const c = answer as z.infer<typeof Comparison>;
