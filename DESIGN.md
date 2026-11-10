@@ -40,13 +40,13 @@ The backend's MCP endpoint (`/mcp`, stateless, loopback-only by default) serves 
    - the endings are the answer shapes, sent as plain JSON schemas.
 4. **Observation.** The run streams deltas and entries. The chat service reads them for the screen (search lanes, notes, sources) and keeps each page's text as a snapshot.
 5. **Checks** when the run ends. Answer shapes are validated, citations are checked against snapshots, and replies that talk about "the context" are caught. A problem continues the run once (`MAX_CORRECTIONS = 1`); see Citations.
-6. **Record.** The turn is saved as the person saw it. The transcript gets the question and the settled answer only (see Replay). The ledger writes the index card and the facts.
+6. **Record.** The turn is saved as the person saw it. The transcript gets the question and the settled answer only (see Replay). The person has the answer now. Then, in the background, the indexer writes the index card and the ledger stores it with the facts.
 
 The screen gets a vocabulary of its own (`TurnEvent`), not the provider's:
 - `start`, `activity`, `sources`;
 - `text` and `thinking`;
 - `searching`, the point where text before a tool call becomes a working note;
-- `settled`, `revise`, `fixing`, `patch`;
+- `revise`, `fixing`, `patch`;
 - `joined`, `shape`, `done`, `error`.
 
 ## The loop
@@ -65,14 +65,14 @@ Also in the loop:
 
 ## Memory
 
-The rule: **the model writes the metadata, software does the matching.** There is never an extra model call for memory.
+The rule: **a model writes the metadata, software does the matching.** Matching never calls a model; writing the metadata is one background call per turn, after the answer.
 
-### Indexing, in the answering response
+### Indexing, in the background
 
-A prose answer ends with an `answer_index` call. Comparison and changes answers carry an `index` field instead (without facts, since the cells are the facts). The card (`domain/card.ts`) holds:
+After `done` is sent, `services/indexer.ts` starts a separate run: no tools, its own fixed instruction, and one way to end, `answer_index`. Its brief is the context a good card needs: this conversation's last few exchanges (so "what about Render?" is indexed as Postgres hosting, not a bare name), what memory matched the question to and how confidently (so a re-check is labelled one), the question with any messages that joined it, the answer with its citations, and the sources. If the run fails, the ledger writes the card software can write on its own (site names and row names), so an exchange is never unfindable. The cost is one model call per turn; the gain is that nobody waits for metadata, and the card is written with more context than the answering model had. The card (`domain/card.ts`) holds:
 - the kind of exchange (new, re-check, follow-up, chat) and a one-line summary;
 - the entities and topics, each with aliases, including generic category words ("Postgres hosting" is also "db hosts", "managed database");
-- the facts stated, each with its subject, value, source and quote.
+- for prose answers, the facts stated, each with its subject, value, source and quote (a comparison's or report's facts are its own cells).
 
 The ledger (`services/ledger.ts`) stores the card's terms and the facts. A fact keeps its quote only if the quote contains the fact's figure. Facts are tagged by origin:
 - **stated** in an original answer;
@@ -128,7 +128,7 @@ Actual time is spent on the model writing. Perceived time is designed:
 - `start` arrives in under 0.1 s, with a skeleton in place of the answer;
 - search lanes appear as the model types each query (streamed tool input);
 - what the model writes before a search shows as working notes, which fold away when the answer lands;
-- the answer is final when its text ends: `settled` is sent when the index card starts, so nobody waits for metadata;
+- the answer is final when its text ends: the index card is written afterwards, by its own run, so nobody waits for metadata;
 - the search cache shares in-flight requests and reuses results for 10 minutes (2 minutes for live reads);
 - the re-check's page reads run in parallel with a hard 4 s wait.
 
@@ -156,6 +156,6 @@ Actual time is spent on the model writing. Perceived time is designed:
 ## Deliberately left out
 
 - **Embeddings**, because the card's aliases carry the meaning and exact matching can be explained and tested.
-- **A recall tool, a router model or an indexing call**, because each one is a model round to wait for.
+- **A recall tool or a router model**, because each one is a model round to wait for. (Indexing is a model call, but after the answer.)
 - **Provider-native citations**, because they only work with Claude.
 - **Sign-in and per-person memory**: one person per deployment for now.

@@ -20,7 +20,6 @@ import { ENDING_PREFIX, type OutputShape } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
 import { applyEdits, Fixes } from "../domain/edits.ts";
 import { answerShapes, FIXES_SHAPE, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
-import { IndexCard, ShapeIndex } from "../domain/card.ts";
 import { bareCitations, citationsIn, describeProblems, markUnverified, quoteFound, quoteProblems, repairCitations } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
@@ -30,6 +29,7 @@ import type { MemoryStore } from "../ports/memory.ts";
 import type { AgentRuntimePort } from "../ports/runtime.ts";
 import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
+import type { Indexer } from "./indexer.ts";
 import type { LedgerService } from "./ledger.ts";
 import { recheck } from "./recheck.ts";
 import type { RecallService } from "./recall.ts";
@@ -47,8 +47,6 @@ export type TurnEvent =
   | { type: "searching" }
   /** What was streamed is being redone (a correction, or a tool call written as text): keep it on screen as a draft until the new text arrives. */
   | { type: "revise"; reason: string }
-  /** The answer's text is complete and checked; what follows (its index card) is not shown. */
-  | { type: "settled"; text: string }
   /** The reply's citations are being corrected in place; the reply stays on screen. */
   | { type: "fixing"; reason: string }
   /** The corrected reply, and the sources whose citations changed, to show where. */
@@ -87,6 +85,8 @@ export class ChatService {
       search: SearchService;
       recall: RecallService;
       ledger: LedgerService;
+      /** Writes each turn's index card in the background. Without one, software's card is written at once. */
+      indexer?: Indexer;
       log: (message: string) => void;
     },
   ) {}
@@ -119,7 +119,7 @@ export class ChatService {
   }
 
   private async run(input: TurnInput, out: Channel<TurnEvent>) {
-    const { store, clock, models, runtime, search, recall, ledger, log } = this.deps;
+    const { store, clock, models, runtime, search, recall, ledger, indexer, log } = this.deps;
     const message = input.message.trim().slice(0, 8000);
     if (!message) throw new Error("Say something first.");
 
@@ -236,12 +236,6 @@ export class ChatService {
               if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
             } else if (patching) {
               // The fix's own calls (its edits, any search) change nothing on screen until applied.
-            } else if (d.name === INDEX_TOOL) {
-              // The index card follows the answer and is not shown. The text is complete once it
-              // starts: if it holds up, it is the answer now, without waiting for the card.
-              if (d.type === "tool_start" && !this.check({ shape: "reply", text: spoke }, shapes, book)) {
-                out.push({ type: "settled", text: markUnverified(repaired(spoke), book.snapshots) });
-              }
             } else if (d.type === "tool_start") {
               // Whatever was said before a tool call is a note on the way, not the answer.
               spoke = "";
@@ -290,8 +284,7 @@ export class ChatService {
           log(`correction: ${problem.split("\n").slice(0, 3).join(" ").slice(0, 300)}`);
           // Continue the run with the correction: the model sees what it said and why it was sent back.
           history = [...transcript, ask, ...fresh];
-          const prose = ended.shape === "reply" || ended.shape === "index";
-          if (prose && problem.startsWith("Some citations")) {
+          if (ended.shape === "reply" && problem.startsWith("Some citations")) {
             // Fixed in place: the model sends edits, the rest of the reply stands as written.
             patching = { shape: ended.shape, text: ended.text, answer: ended.answer };
             runEndings = [{ name: FIXES_SHAPE.name, description: FIXES_SHAPE.description, schema: FIXES_SHAPE.schema }];
@@ -308,9 +301,7 @@ export class ChatService {
           continue;
         }
 
-        // A prose answer ends with its index card; a structured one carries the card inside it.
-        const prose = ended.shape === "reply" || ended.shape === "index";
-        const written = cardOf(prose ? ended.answer : (ended.answer as { index?: unknown } | undefined)?.index);
+        const prose = ended.shape === "reply";
         const answer = prose ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
         const turn = record(prose ? "reply" : ended.shape, ended.text, answer);
         store.append(conversation.id, settledExchange(question(), now, input.timeZone, turn.shape === "reply" ? repaired(ended.text) : turn.answerText));
@@ -323,8 +314,12 @@ export class ChatService {
           `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (re-checked quotes)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
             `${book.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
         );
-        const card = ledger.record(turn, written);
-        log(`ledger: ${written ? "card" : "fallback card"}, ${card.kind}, ${card.terms.length} terms, ${card.facts.length} facts`);
+        // The index card is written by its own run, in the background, with the context it needs:
+        // the person already has the answer. Without an indexer, software's card.
+        const earlier = store.turns(conversation.id).filter((t) => t.id !== turn.id);
+        const matched = memory.activity.flatMap((a) => (a.kind === "memory" ? a.exchanges : []));
+        if (indexer) void indexer.index(turn, { earlier, matched, confidence: memory.confidence, timeZone: input.timeZone });
+        else ledger.record(turn);
         return;
       }
     } catch (error) {
@@ -376,8 +371,7 @@ export class ChatService {
    * the fact, a malformed one or an unknown source always; quote misses only beyond two).
    */
   private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[], book: SourceBook): string | null {
-    // The index card is metadata: a bad one falls back to software's card, never costs a rewrite.
-    if (ended.shape !== "reply" && ended.shape !== "index") {
+    if (ended.shape !== "reply") {
       const shape = shapes.find((s) => s.name === ended.shape);
       const result = shape?.parse?.(ended.answer);
       return result && !result.ok ? `Your answer_${ended.shape} call did not hold up: ${result.error}` : null;
@@ -395,7 +389,6 @@ export class ChatService {
   }
 }
 
-const INDEX_TOOL = `${ENDING_PREFIX}index`;
 const laneLabel = (args: SearchInput) => args.query ?? `Reading back ${args.pages?.join(", ") ?? "pages"}`;
 
 /**
@@ -413,14 +406,6 @@ function settledExchange(message: string, at: Date, tz: string, answer: string):
 }
 /** Words that only describe how the agent works, never what it knows. */
 const MECHANISM = ["the context", "my context", "context block", "context i have", "my memory shows", "memory shows", "the calendar shows", "according to my memory", "<context", "<rechecked"];
-
-/** The model's index card, if it wrote a valid one (a prose answer's, or a structured answer's without facts). */
-function cardOf(value: unknown): IndexCard | undefined {
-  const full = IndexCard.safeParse(value);
-  if (full.success) return full.data;
-  const light = ShapeIndex.safeParse(value);
-  return light.success ? { ...light.data, facts: [] } : undefined;
-}
 
 /** The shape's own reading of its arguments (defaults filled, unknown fields dropped), if it has one. */
 function parsed(shapes: OutputShape[], ended: { shape: string; answer?: unknown }): unknown {

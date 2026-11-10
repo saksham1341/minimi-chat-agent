@@ -19,6 +19,7 @@ import type { AgentRuntimePort } from "./ports/runtime.ts";
 import type { SearchProvider } from "./ports/search.ts";
 import { ModelCatalog } from "./services/catalog.ts";
 import { ChatService } from "./services/chat.ts";
+import { Indexer } from "./services/indexer.ts";
 import { LedgerService } from "./services/ledger.ts";
 import { RecallService } from "./services/recall.ts";
 import { SearchService } from "./services/web-search.ts";
@@ -76,7 +77,8 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   const catalog = new ModelCatalog(runtime);
   const recall = new RecallService(store);
   const ledger = new LedgerService(store);
-  const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, log });
+  const indexer = new Indexer({ runtime, ledger, log });
+  const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, indexer, log });
 
   return { settings, catalog, search, store, clock, chat, recall };
 }

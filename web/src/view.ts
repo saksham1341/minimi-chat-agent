@@ -74,8 +74,6 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, revising: event.reason, settled: false };
     case "patch":
       return { ...turn, text: event.text, fixed: event.fixed, revising: undefined, settled: true };
-    case "settled":
-      return { ...turn, text: event.text, draft: undefined, revising: undefined, settled: true };
     case "searching":
       return turn.text.trim() ? { ...turn, notes: [...turn.notes, turn.text.trim()], text: "" } : turn;
     case "shape": {

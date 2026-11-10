@@ -1,8 +1,7 @@
 /**
  * The ledger: after an answer, write down what the exchange was about and the facts it stated,
- * with source, quote, date and origin. All of it comes from the answer itself: the model wrote the
- * index card in the same response (`domain/card.ts`), and a structured answer's facts are its own
- * cells and items. No second model call.
+ * with source, quote, date and origin. The index card comes from the indexer's background run
+ * (`services/indexer.ts`), and a structured answer's facts are its own cells and items.
  *
  *   origin    facts from a re-check are "observed", never "stated": a later "is it still correct?"
  *             measures against what the original answer said, not against the last check

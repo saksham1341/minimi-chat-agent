@@ -13,7 +13,7 @@ import { z } from "zod";
 import { Fixes } from "./edits.ts";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
-import { IndexCard, ShapeIndex } from "./card.ts";
+import { IndexCard } from "./card.ts";
 import { isVendorSite } from "./vendor.ts";
 
 const sourceIds = z
@@ -46,7 +46,6 @@ export const Comparison = z.object({
     )
     .min(2),
   takeaway: z.string().describe("Two or three sentences of markdown: which fits whom, and why, with citations."),
-  index: ShapeIndex.describe("This exchange's index card, written last. Not shown to the person: it is how you will find this exchange again."),
 });
 
 export const Changes = z.object({
@@ -76,7 +75,6 @@ export const Changes = z.object({
     )
     .min(1),
   summary: z.string().describe("One or two sentences of markdown: the bottom line, with citations."),
-  index: ShapeIndex.describe("This exchange's index card, written last. Not shown to the person: it is how you will find this exchange again."),
 });
 
 export const Choices = z.object({
@@ -171,13 +169,6 @@ export function answerShapes(sources: () => Source[] = () => []): OutputShape[] 
       ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources())) as Check,
     ),
     shape(
-      "index",
-      IndexCard,
-      "After a prose answer, in the same message, call this once with the exchange's index card. It is not shown to " +
-        "the person: it is how you will find this exchange again in a later conversation. Not used after the answer " +
-        "shapes, which carry their card in their own `index` field.",
-    ),
-    shape(
       "choices",
       Choices,
       "Ask the person one short question with tappable answers, ending the turn. Use only when you cannot give a useful " +
@@ -188,6 +179,13 @@ export function answerShapes(sources: () => Source[] = () => []): OutputShape[] 
 }
 
 export const ANSWER_SHAPES = answerShapes();
+
+/** The indexer's one way to end: the exchange's card. Offered only to the indexing run, never to the answering one. */
+export const INDEX_SHAPE = shape(
+  "index",
+  IndexCard,
+  "Hand over the exchange's index card. Call it once; it ends the run.",
+);
 
 /** Offered only when a reply's citations are sent back: the corrections, as edits to the reply. */
 export const FIXES_SHAPE = shape(

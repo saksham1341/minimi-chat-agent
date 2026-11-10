@@ -15,6 +15,7 @@ import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { AgentRuntimePort } from "../src/ports/runtime.ts";
 import { ModelCatalog } from "../src/services/catalog.ts";
 import { ChatService, type TurnEvent } from "../src/services/chat.ts";
+import { Indexer } from "../src/services/indexer.ts";
 import { LedgerService } from "../src/services/ledger.ts";
 import { RecallService } from "../src/services/recall.ts";
 import { SearchService } from "../src/services/web-search.ts";
@@ -113,5 +114,42 @@ describe("checking a run and continuing it", () => {
     expect(events.some((e) => e.type === "revise")).toBe(false);
     const done = events.find((e) => e.type === "done");
     expect(done?.type === "done" && done.turn.lead).toBe(expected);
+  });
+});
+
+describe("indexing in the background", () => {
+  it("answers first, then writes the card in a separate run with the exchange's context", async () => {
+    const requests: RunRequest[] = [];
+    const card = { kind: "new", summary: "Cheapest managed Postgres", entities: [{ name: "Neon", aliases: ["db host"] }], topics: [{ phrase: "Postgres hosting", aliases: ["managed database"] }], facts: [] };
+    const runtime: AgentRuntimePort = {
+      models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
+      say: async () => null,
+      async *run(request) {
+        requests.push(request);
+        if (request.tools === false) yield { type: "done", shape: "index", text: "", answer: card, rounds: 1, cutShort: false };
+        else yield { type: "done", shape: "reply", text: "Neon is the cheapest.", rounds: 1, cutShort: false };
+      },
+    };
+    const store = new SqliteMemory(":memory:");
+    const ledger = new LedgerService(store);
+    let indexed!: () => void;
+    const finished = new Promise<void>((r) => (indexed = r));
+    const chat = new ChatService({
+      store, clock: new SystemClock(), models: new ModelCatalog(runtime), runtime,
+      search: new SearchService({ name: "fake", available: true, read: async () => [], search: async () => [] }),
+      recall: new RecallService(store), ledger,
+      indexer: new Indexer({ runtime, ledger, log: (m) => m.startsWith("index") && indexed() }),
+      log: () => {},
+    });
+    const events: TurnEvent[] = [];
+    for await (const e of chat.turn({ message: "Cheapest Postgres host?", timeZone: "UTC" })) events.push(e);
+    expect(events.at(-1)?.type).toBe("done");
+    // The answering run was never offered an index card to write.
+    expect(requests[0].endings.map((e) => e.name)).not.toContain("index");
+    await finished;
+    expect(requests[1]).toMatchObject({ tools: false, endings: [{ name: "index" }] });
+    expect(requests[1].ask.text).toContain("Cheapest Postgres host?");
+    expect(requests[1].ask.text).toContain("Neon is the cheapest.");
+    expect(store.turnsWithTerms(["db host", "managed database"], new Date(Date.now() + 1000), 10).size).toBe(1);
   });
 });

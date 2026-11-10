@@ -1,9 +1,9 @@
 /**
- * The index card: what an exchange was about, written by the answering model in the same response
- * as its answer (structured output, no second call), and used by software to find the exchange
- * again. The model does what it is good at, recognising what was discussed and every way a person
- * might later refer to it ("Postgres hosting" is also "db hosts", "managed database", "neon").
- * Software does the matching against it, deterministically and in milliseconds.
+ * The index card: what an exchange was about, written by a model in a separate run after the
+ * answer is on screen (`services/indexer.ts`), and used by software to find the exchange again.
+ * The model does what it is good at, recognising what was discussed and every way a person might
+ * later refer to it ("Postgres hosting" is also "db hosts", "managed database", "neon"). Software
+ * does the matching against it, deterministically and in milliseconds.
  */
 import { z } from "zod";
 import type { ClaimDraft, ExchangeCard, Source } from "./memory.ts";
@@ -29,32 +29,26 @@ export const IndexCard = z.object({
     .array(
       z.object({
         subject: z.string().describe("Who or what, specific: 'Neon, Launch plan'."),
-        value: z.string().describe("What you stated, with numbers and units as given."),
-        source: z.string().describe("The source id you cited for it (S3f2a1), or ''."),
+        value: z.string().describe("What the answer stated, with numbers and units as given."),
+        source: z.string().describe("The source id the answer cited for it (S3f2a1), or ''."),
         quote: z.string().describe("The quoted words of that citation, exactly, or ''."),
       }),
     )
-    .describe("The checkable facts your answer stated (prices, limits, dates, versions, launches). Empty for opinions or small talk."),
+    .describe("The checkable facts the answer stated (prices, limits, dates, versions, launches). Empty for opinions, small talk, and table or what-changed answers (their cells are the facts)."),
 });
 export type IndexCard = z.infer<typeof IndexCard>;
 
-/**
- * The card a structured answer carries: the same, without facts. A comparison's or report's facts
- * are its own cells and items; asking the model to write them twice only costs the person time.
- */
-export const ShapeIndex = IndexCard.omit({ facts: true });
-
-export function toCard(written: IndexCard | z.infer<typeof ShapeIndex>, sources: Source[]): ExchangeCard {
+export function toCard(written: IndexCard, sources: Source[]): ExchangeCard {
   const urls = new Map(sources.map((s) => [s.id, s.url]));
   const words = [...written.entities.flatMap((e) => [e.name, ...e.aliases]), ...written.topics.flatMap((t) => [t.phrase, ...t.aliases])];
-  const facts: ClaimDraft[] = ("facts" in written ? written.facts : [])
+  const facts: ClaimDraft[] = written.facts
     .filter((f) => f.subject && f.value)
     .map((f) => ({ subject: f.subject, value: f.value, sourceUrl: urls.get(f.source), ...(f.quote ? { quote: f.quote } : {}) }));
   return { kind: written.kind, summary: written.summary, terms: [...new Set(words.map(matchForm).filter(Boolean))], facts };
 }
 
 /**
- * The card software can write on its own, when the model did not: the sites the answer drew on
+ * The card software can write on its own, when the indexing run failed: the sites the answer drew on
  * and the names in its card. Fewer ways in than the model's, never none.
  */
 export function fallbackCard(sources: Source[], names: string[]): ExchangeCard {
