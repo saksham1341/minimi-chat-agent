@@ -6,7 +6,7 @@ npm install
 npm start               # http://localhost:3000  (HOST=0.0.0.0 to open it to your network)
 ```
 
-Node 22.13+. Every variable it reads is in `.env.example`; startup prints what it found.
+Node 22.13+. Every variable it reads is in `.env.example`; startup prints what it found. How it fits together, in more depth: [`DESIGN.md`](DESIGN.md).
 
 ## How it works
 
