@@ -15,6 +15,13 @@ export class RemoteRuntime implements AgentRuntimePort {
     return (await response.json()) as ModelList;
   }
 
+  async say(runId: string, text: string): Promise<{ id: string } | null> {
+    const response = await fetch(new URL(`/runs/${encodeURIComponent(runId)}/input`, this.url), { method: "POST", headers: this.headers(), body: JSON.stringify({ text }) });
+    if (response.status === 409) return null;
+    if (!response.ok) throw new Error(`The agent runtime answered ${response.status}.`);
+    return (await response.json()) as { id: string };
+  }
+
   async *run(request: RunRequest, signal?: AbortSignal): AsyncIterable<RunEvent> {
     const response = await fetch(new URL("/runs", this.url), { method: "POST", headers: this.headers(), body: JSON.stringify(request), signal });
     if (!response.ok || !response.body) throw new Error(`The agent runtime answered ${response.status}.`);

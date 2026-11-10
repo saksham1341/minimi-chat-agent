@@ -109,7 +109,7 @@ button:disabled { cursor: default; }
   margin: 0; max-width: 85%; padding: 0.6rem 0.9rem; border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
   background: var(--fog); white-space: pre-wrap; overflow-wrap: anywhere;
 }
-.question time { order: -1; font-size: 0.75rem; color: var(--faint); font-variant-numeric: tabular-nums; padding-bottom: 0.4rem; }
+.question time { font-size: 0.75rem; color: var(--faint); font-variant-numeric: tabular-nums; padding-bottom: 0.4rem; }
 
 .answer { max-width: var(--measure); }
 
@@ -476,3 +476,13 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
 @container (max-width: 34rem) {
   .change { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
 }
+
+/* Messages sent while an answer streams: they wait above the text box, in order, and can be taken back. */
+.queue { list-style: none; margin: 0 0 0.5rem; padding: 0; display: grid; gap: 0.3rem; }
+.queued { display: flex; align-items: baseline; gap: 0.6rem; min-width: 0; padding: 0.35rem 0.4rem 0.35rem 0.7rem; border-radius: var(--radius-m); background: var(--fog); font-size: 0.875rem; }
+.queued-label { flex: none; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.queued-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); }
+.queued-remove { flex: none; border: 0; background: none; padding: 0 0.35rem; font-size: 1rem; line-height: 1; color: var(--muted); }
+.queued-remove:hover, .queued-remove:focus-visible { color: var(--ink); }
+.question-said { display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; max-width: 85%; min-width: 0; }
+.question-said p { max-width: 100%; }

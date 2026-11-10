@@ -48,6 +48,7 @@ describe("checking a run and continuing it", () => {
     const replies = ['Neon costs $19 [S9abcd "Launch $19"].', "Neon's Launch plan costs $19 a month."];
     const runtime: AgentRuntimePort = {
       models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
+      say: async () => null,
       async *run(request) {
         requests.push(request);
         const text = replies[requests.length - 1];
@@ -85,6 +86,7 @@ describe("checking a run and continuing it", () => {
     const reply = 'Neon is the cheapest. Its Launch plan costs $19 [S9abcd "Launch $19"]. Supabase Pro is $25.';
     const runtime: AgentRuntimePort = {
       models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
+      say: async () => null,
       async *run(request) {
         requests.push(request);
         if (requests.length === 1) {

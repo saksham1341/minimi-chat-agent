@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { asked, type Entry, type Said } from "../src/agents/conversation.ts";
+import { Inbox } from "../src/agents/inbox.ts";
 import { stream, type LoopEvent } from "../src/agents/loop.ts";
 import type { ChatModel, ModelRequest, ToolSurface } from "../src/agents/ports.ts";
 import { ANSWER_SHAPES } from "../src/domain/answers.ts";
@@ -128,3 +129,32 @@ describe("the loop", () => {
   });
 
 });
+
+describe("messages said to a run while it works", () => {
+  it("join after the round's tool results, before the next request, all at once", async () => {
+    const inbox = new Inbox();
+    const { model, requests } = scripted({ text: "", toolCalls: [call("a")] }, { text: "answer to both", toolCalls: [] });
+    // Said while the search runs.
+    const searching = tools(async (c) => {
+      inbox.put("only the free tiers, please");
+      inbox.put("and in EUR");
+      return { callId: c.id, name: c.name, content: "results", failed: false };
+    });
+    const events = await collect(stream(model, searching, { instruction: "", ask: asked("q"), inbox }));
+    const tail = requests[1].history.slice(-3);
+    expect(tail.map((e) => e.kind)).toEqual(["ran", "asked", "asked"]);
+    expect(tail.slice(1).map((e) => (e as { text: string }).text)).toEqual(["only the free tiers, please", "and in EUR"]);
+    expect(events.filter((e) => e.type === "dequeued")).toHaveLength(2);
+    expect(inbox.size).toBe(0);
+  });
+
+  it("are left for the caller when the run ends without another round", async () => {
+    const inbox = new Inbox();
+    const { model } = scripted({ text: "answer", toolCalls: [] });
+    inbox.put("too late for this run");
+    const events = await collect(stream(model, tools(), { instruction: "", ask: asked("q"), inbox }));
+    expect(events.some((e) => e.type === "dequeued")).toBe(false);
+    expect(inbox.size).toBe(1);
+  });
+});
+

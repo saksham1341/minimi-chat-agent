@@ -21,6 +21,7 @@
  * Nothing here knows a vendor. The model and the tools arrive as ports.
  */
 import { Channel } from "./channel.ts";
+import type { Inbox } from "./inbox.ts";
 import type { Asked, Entry, Ran, Said, ToolCall, ToolResult } from "./conversation.ts";
 import { asked } from "./conversation.ts";
 import type { ChatModel, ModelDelta, ToolSpec, ToolSurface } from "./ports.ts";
@@ -53,6 +54,8 @@ export type LoopEvent =
   | { type: "entry"; entry: Entry }
   /** What was streamed this round was not an answer (a tool call written as text): take it back. */
   | { type: "retract" }
+  /** A message said to the run while it worked has joined the conversation; it follows as an `asked` entry. */
+  | { type: "dequeued"; id: string }
   | {
       type: "done";
       /** `reply` for plain text, otherwise the shape's name. */
@@ -71,6 +74,8 @@ export interface LoopInput {
   endings?: OutputShape[];
   maxRounds?: number;
   signal?: AbortSignal;
+  /** What is said to the run while it works, taken up at the next seam. */
+  inbox?: Inbox;
 }
 
 /**
@@ -132,6 +137,15 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
           "runtime",
         ),
       );
+    }
+
+    // The seam. Any tool results are back and the next request has not gone out, so what was said
+    // while that round ran joins here, without landing inside an exchange the model is owed.
+    if (rounds > 0) {
+      for (const waiting of input.inbox?.drain() ?? []) {
+        out.push({ type: "dequeued", id: waiting.id });
+        record(asked(waiting.text));
+      }
     }
 
     const said: Said = await model.respond(

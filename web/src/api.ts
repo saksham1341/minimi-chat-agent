@@ -34,6 +34,16 @@ export const api = {
     return response.ok ? response.json() : [];
   },
 
+  /** Says something to a turn still working; it joins after the turn's next round of searches. Null if the turn is past taking it. */
+  async say(turnId: string, text: string): Promise<{ id: string } | null> {
+    const response = await fetch(`/api/turns/${encodeURIComponent(turnId)}/input`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text }),
+    }).catch(() => null);
+    return response?.status === 202 ? response.json() : null;
+  },
+
   /** Streams one turn's events. Aborting the signal stops the agent on the server too. */
   async chat(
     body: { conversationId?: string; message: string; modelId?: string },

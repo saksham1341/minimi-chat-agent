@@ -31,8 +31,14 @@ export function Turn(props: {
   return (
     <article className="turn" aria-busy={live}>
       <div className="question">
-        <p>{turn.question}</p>
         <time dateTime={turn.at}>{time}</time>
+        <div className="question-said">
+          <p>{turn.question}</p>
+          {/* Said while it worked, and taken up after a round of searches. */}
+          {turn.joined.map((j, i) => (
+            <p key={i} className="joined">{j}</p>
+          ))}
+        </div>
       </div>
       <div className="answer">
         {live && !turn.settled && <Status turn={turn} onOpen={onFocus} />}

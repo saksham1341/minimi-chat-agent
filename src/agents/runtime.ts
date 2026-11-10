@@ -8,6 +8,7 @@
  * way. In-process the request is a function call with no socket; remote it is `agents/api.ts`.
  */
 import type { Asked, Entry } from "./conversation.ts";
+import { Inbox } from "./inbox.ts";
 import { stream, type LoopEvent, type OutputShape } from "./loop.ts";
 import { McpToolSurface } from "./mcp.ts";
 import type { ChatModel, ModelInfo, ToolSurface } from "./ports.ts";
@@ -38,8 +39,13 @@ const NO_TOOLS: ToolSurface = {
   run: async (call) => ({ callId: call.id, name: call.name, content: "No tools in this run.", failed: true }),
 };
 
+/** Messages a run will hold before refusing more. */
+const MAX_WAITING = 32;
+
 export class AgentRuntime {
   private readonly byId: Map<string, ChatModel>;
+  /** The inbox of every run in progress, by the caller's run id. */
+  private readonly inboxes = new Map<string, Inbox>();
 
   constructor(
     models: ChatModel[],
@@ -60,6 +66,8 @@ export class AgentRuntime {
       return;
     }
     const tools = request.tools === false || !this.toolServer ? undefined : new McpToolSurface(this.toolServer);
+    const inbox = new Inbox();
+    this.inboxes.set(request.runId, inbox);
     try {
       yield* stream(model, tools ?? NO_TOOLS, {
         instruction: request.instruction,
@@ -68,10 +76,23 @@ export class AgentRuntime {
         endings: request.endings,
         maxRounds: request.maxRounds,
         signal,
+        inbox,
       });
     } finally {
+      // Whatever is still waiting when the run ends was never heard: the caller sends it as a new ask.
+      this.inboxes.delete(request.runId);
       await tools?.close();
     }
+  }
+
+  /**
+   * Say something to a run that is still working. Taken up at its next seam; the run streams
+   * `dequeued` when it is. Null when there is no such run (it has finished) or it is full.
+   */
+  say(runId: string, text: string): { id: string } | null {
+    const inbox = this.inboxes.get(runId);
+    if (!inbox || inbox.size >= MAX_WAITING) return null;
+    return { id: inbox.put(text).id };
   }
 
   private defaultId(): string | undefined {

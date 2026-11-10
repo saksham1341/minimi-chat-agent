@@ -1,5 +1,5 @@
 /**
- * The runtime as its own deployment: the same `AgentRuntime`, reached over HTTP. Two routes, one
+ * The runtime as its own deployment: the same `AgentRuntime`, reached over HTTP. Three routes, one
  * optional bearer token (`AGENT_SERVICE_TOKEN`), and nothing else: it stores nothing.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -10,6 +10,14 @@ export function runtimeServer(runtime: AgentRuntime, token?: string) {
     if (token && req.headers.authorization !== `Bearer ${token}`) return reply(res, 401, { error: "unauthorized" });
     try {
       if (req.url === "/models" && req.method === "GET") return reply(res, 200, runtime.models());
+      const input = req.url?.match(/^\/runs\/([\w-]+)\/input$/);
+      if (input && req.method === "POST") {
+        const { text } = JSON.parse(await body(req)) as { text?: string };
+        if (!text?.trim()) return reply(res, 400, { error: "say something" });
+        const waiting = runtime.say(input[1], text.trim());
+        // A finished run cannot take a message; pretending otherwise would swallow it.
+        return waiting ? reply(res, 202, waiting) : reply(res, 409, { error: "that run is not in progress" });
+      }
       if (req.url === "/runs" && req.method === "POST") {
         const request = JSON.parse(await body(req)) as RunRequest;
         const controller = new AbortController();

@@ -14,6 +14,13 @@ const SUGGESTIONS = [
   "What did I ask you yesterday? Is your answer still right?",
 ];
 
+/** A message waiting while an answer streams; `id` once the running turn has accepted it. */
+export interface Queued {
+  key: string;
+  text: string;
+  id?: string;
+}
+
 export function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
@@ -64,9 +71,24 @@ export function App() {
   }, [turns]);
 
   const busy = turns.at(-1)?.status === "streaming";
+  // Messages sent while an answer is streaming. Each is said to the running turn at once, and the
+  // agent takes it up after its next round of searches (the turn streams `joined`, and it leaves
+  // the queue). One that arrives after the last search, or that the turn could not take, goes as
+  // the next question when the answer is done. Stopping, or leaving the conversation, hands them
+  // back to the composer rather than sending or losing them.
+  const [queue, setQueue] = useState<Queued[]>([]);
+  const [restore, setRestore] = useState({ text: "", n: 0 });
+  const unqueue = () => {
+    if (queue.length) setRestore((r) => ({ text: queue.map((q) => q.text).join("\n\n"), n: r.n + 1 }));
+    setQueue([]);
+  };
+  const stop = () => {
+    unqueue();
+    controller.current?.abort();
+  };
 
   const open = async (id: string) => {
-    controller.current?.abort();
+    stop();
     const { conversation, turns } = await api.conversation(id);
     setConversationId(conversation.id);
     setTurns(turns.map(fromRecord));
@@ -76,14 +98,33 @@ export function App() {
   };
 
   const startNew = () => {
-    controller.current?.abort();
+    stop();
     setConversationId(null);
     setTurns([]);
     setDrawer(false);
   };
 
-  const send = async (message: string) => {
-    if (!modelId || busy) return;
+  const send = (message: string) => {
+    if (!busy) return void run(message);
+    const item: Queued = { key: `${Date.now()}-${Math.random()}`, text: message.trim() };
+    setQueue((q) => [...q, item]);
+    const turnId = turns.at(-1)?.id;
+    if (turnId && !turnId.startsWith("local-")) {
+      void api.say(turnId, item.text).then((waiting) => waiting && setQueue((q) => q.map((x) => (x.key === item.key ? { ...x, id: waiting.id } : x))));
+    }
+  };
+
+  // The next queued message goes as soon as the answer before it is finished.
+  useEffect(() => {
+    if (busy || !queue.length) return;
+    const [next, ...rest] = queue;
+    setQueue(rest);
+    void run(next.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, queue]);
+
+  const run = async (message: string) => {
+    if (!modelId) return;
     // Not crypto.randomUUID: it exists only in secure contexts, and this page is often opened over
     // plain http on a LAN or tailnet address. This id only lives until the server assigns the real one.
     const local = `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -100,6 +141,14 @@ export function App() {
           setFocusId(event.turnId);
           setConversationId(event.conversation.id);
           if (!conversationId) refresh();
+        }
+        if (event.type === "joined") {
+          // Taken up by the running turn: no longer waiting. Matched by id, or by text if the id has not come back yet.
+          setQueue((q) => {
+            const at = q.findIndex((x) => x.id === event.id);
+            const i = at >= 0 ? at : q.findIndex((x) => !x.id && x.text === event.text.trim());
+            return i >= 0 ? q.filter((_, j) => j !== i) : q;
+          });
         }
         update((t) => apply(t, event));
         if (event.type === "done") refresh();
@@ -174,7 +223,7 @@ export function App() {
         </div>
 
         <div className="dock" ref={dock}>
-          <Composer conversationId={conversationId} meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
+          <Composer conversationId={conversationId} meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={stop} busy={busy} queue={queue} onUnqueue={(i) => setQueue((q) => q.filter((_, j) => j !== i))} restore={restore} />
         </div>
       </main>
       {(showCanvas || showSheet) && canvasTurn && (

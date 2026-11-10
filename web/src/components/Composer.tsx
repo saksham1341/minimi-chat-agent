@@ -1,6 +1,10 @@
-/** Where the person types, picks the model, and stops an answer they no longer need. */
+/**
+ * Where the person types, picks the model, and stops an answer they no longer need. While an answer
+ * streams they can keep writing: what they send then is queued and goes when the answer is done.
+ */
 import { useEffect, useRef, useState } from "react";
 import { api, type MemoryPreview, type Meta } from "../api.ts";
+import type { Queued } from "../App.tsx";
 import { Chevron } from "./icons.tsx";
 
 export function Composer(props: {
@@ -11,8 +15,15 @@ export function Composer(props: {
   onSend: (text: string) => void;
   onStop: () => void;
   busy: boolean;
+  queue: Queued[];
+  onUnqueue: (index: number) => void;
+  /** Queued messages handed back (after a stop), to edit or send again. */
+  restore: { text: string; n: number };
 }) {
   const [text, setText] = useState("");
+  useEffect(() => {
+    if (props.restore.n) setText((t) => [props.restore.text, t.trim()].filter(Boolean).join("\n\n"));
+  }, [props.restore]);
   const preview = useMemoryPreview(text, props.conversationId, props.busy);
   const area = useRef<HTMLTextAreaElement>(null);
 
@@ -28,7 +39,7 @@ export function Composer(props: {
   }, [props.busy]);
 
   const send = () => {
-    if (!text.trim() || props.busy || !props.modelId) return;
+    if (!text.trim() || !props.modelId) return;
     props.onSend(text);
     setText("");
   };
@@ -36,6 +47,17 @@ export function Composer(props: {
   const noModels = props.meta && !props.meta.models.length;
   return (
     <div className="composer">
+      {props.queue.length > 0 && (
+        <ol className="queue" aria-label="Queued messages">
+          {props.queue.map((q, i) => (
+            <li key={q.key} className="queued">
+              <span className="queued-label">{q.id ? "Joins after the next search" : i === 0 ? "Next" : "Then"}</span>
+              <span className="queued-text">{q.text}</span>
+              <button className="queued-remove" onClick={() => props.onUnqueue(i)} aria-label="Remove from queue">×</button>
+            </li>
+          ))}
+        </ol>
+      )}
       {preview.length > 0 && (
         <MemoryLine
           preview={preview}
@@ -49,7 +71,7 @@ export function Composer(props: {
         ref={area}
         rows={1}
         value={text}
-        placeholder={noModels ? "Add ANTHROPIC_API_KEY to .env and restart to start chatting" : "Ask about anything current"}
+        placeholder={noModels ? "Add ANTHROPIC_API_KEY to .env and restart to start chatting" : props.busy ? "Write a follow-up; it goes when this answer is done" : "Ask about anything current"}
         disabled={!!noModels}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -62,12 +84,13 @@ export function Composer(props: {
       <div className="composer-row">
         <ModelPicker meta={props.meta} modelId={props.modelId} onModel={props.onModel} />
         {props.meta && !props.meta.search.available && <span className="composer-warning">Web search is off: add EXA_API_KEY or TAVILY_API_KEY</span>}
-        {props.busy ? (
-          <button className="send is-stop" onClick={props.onStop} aria-label="Stop answering">
+        {props.busy && (
+          <button className="send is-stop" onClick={props.onStop} aria-label={props.queue.length ? "Stop answering and return queued messages" : "Stop answering"}>
             <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" fill="currentColor" /></svg>
           </button>
-        ) : (
-          <button className="send" onClick={send} disabled={!text.trim() || !props.modelId} aria-label="Send">
+        )}
+        {(!props.busy || text.trim()) && (
+          <button className="send" onClick={send} disabled={!text.trim() || !props.modelId} aria-label={props.busy ? "Queue message" : "Send"}>
             <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden><path d="M8 13V3.5M3.5 7.5 8 3l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
           </button>
         )}

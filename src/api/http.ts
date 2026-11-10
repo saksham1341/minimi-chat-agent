@@ -37,6 +37,14 @@ export function serve(app: App, staticDir: string) {
         return json(res, { conversation, turns: app.store.turns(conversation.id) });
       }
       if (path === "/api/chat" && req.method === "POST") return chat(app, req, res);
+      const input = path.match(/^\/api\/turns\/([\w-]+)\/input$/);
+      if (input && req.method === "POST") {
+        // A message for a turn still working: it joins after the turn's next round of searches.
+        if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, { error: "expected application/json" }, 415);
+        const { text } = JSON.parse((await readBody(req)) || "{}") as { text?: string };
+        const waiting = await app.chat.say(input[1], String(text ?? ""));
+        return waiting ? json(res, waiting, 202) : json(res, { error: "that turn is not taking messages" }, 409);
+      }
       if (path === "/api/recall" && req.method === "GET") {
         // The type-ahead preview: memory only. No model, no search, nothing stored.
         const q = url.searchParams;

@@ -7,6 +7,9 @@ export class EmbeddedRuntime implements AgentRuntimePort {
   async models() {
     return this.runtime.models();
   }
+  async say(runId: string, text: string) {
+    return this.runtime.say(runId, text);
+  }
   run(request: RunRequest, signal?: AbortSignal) {
     // Through JSON, as it would cross a socket: nothing that only works in-process slips across.
     return this.runtime.run(JSON.parse(JSON.stringify(request)) as RunRequest, signal);

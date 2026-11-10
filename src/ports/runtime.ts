@@ -7,4 +7,6 @@ import type { ModelList, RunEvent, RunRequest } from "../agents/runtime.ts";
 export interface AgentRuntimePort {
   models(): Promise<ModelList>;
   run(request: RunRequest, signal?: AbortSignal): AsyncIterable<RunEvent>;
+  /** Say something to a run in progress; it joins at the run's next seam. Null if the run has ended. */
+  say(runId: string, text: string): Promise<{ id: string } | null>;
 }

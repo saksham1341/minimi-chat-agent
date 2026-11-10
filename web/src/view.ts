@@ -4,6 +4,8 @@ import type { Activity, Source, TurnEvent, TurnRecord } from "./api.ts";
 export interface ViewTurn {
   id: string;
   question: string;
+  /** Messages sent while this turn worked, which it took up after a round of searches. */
+  joined: string[];
   at: string;
   status: "streaming" | "done" | "error";
   /** Text of the round in progress, or the final answer. */
@@ -31,6 +33,7 @@ export interface ViewTurn {
 export const fromRecord = (t: TurnRecord): ViewTurn => ({
   id: t.id,
   question: t.question,
+  joined: [],
   at: t.at,
   status: "done",
   text: t.lead,
@@ -45,7 +48,7 @@ export const fromRecord = (t: TurnRecord): ViewTurn => ({
 });
 
 export function pending(id: string, question: string): ViewTurn {
-  return { id, question, at: new Date().toISOString(), status: "streaming", text: "", notes: [], thinking: "", settled: false, activity: [], sources: [], shape: "reply" };
+  return { id, question, joined: [], at: new Date().toISOString(), status: "streaming", text: "", notes: [], thinking: "", settled: false, activity: [], sources: [], shape: "reply" };
 }
 
 /** Folds one server event into the turn it belongs to. */
@@ -65,6 +68,8 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, thinking: (turn.thinking + event.text).slice(-4000) };
     case "revise":
       return { ...turn, draft: turn.text || turn.draft || "", revising: event.reason, text: "", settled: false };
+    case "joined":
+      return { ...turn, joined: [...turn.joined, event.text] };
     case "fixing":
       return { ...turn, revising: event.reason, settled: false };
     case "patch":

@@ -53,6 +53,8 @@ export type TurnEvent =
   | { type: "fixing"; reason: string }
   /** The corrected reply, and the sources whose citations changed, to show where. */
   | { type: "patch"; text: string; fixed: string[] }
+  /** A message sent while this turn was working has joined it, after a round of searches. */
+  | { type: "joined"; id: string; text: string }
   | { type: "shape"; shape: string; partial: unknown }
   | { type: "done"; turn: TurnRecord; cutShort: boolean }
   | { type: "error"; message: string };
@@ -69,6 +71,13 @@ export interface TurnInput {
 const MAX_CORRECTIONS = 1;
 
 export class ChatService {
+  /**
+   * Each turn in progress: its run once started, so a message sent meanwhile can be said to it, and
+   * what was said before the run started (while memory was read and pages re-read), which joins
+   * the opening question instead.
+   */
+  private readonly active = new Map<string, { runId?: string; early: { id: string; text: string }[] }>();
+
   constructor(
     private readonly deps: {
       store: MemoryStore;
@@ -81,6 +90,21 @@ export class ChatService {
       log: (message: string) => void;
     },
   ) {}
+
+  /**
+   * Say something to a turn that is still working. The runtime takes it up at the run's next seam
+   * (after a round of searches), and the turn streams `joined` when it does. Null when the turn has
+   * finished, or is past its last search: then it is the next turn's question instead.
+   */
+  async say(turnId: string, text: string): Promise<{ id: string } | null> {
+    const turn = this.active.get(turnId);
+    const message = text.trim().slice(0, 8000);
+    if (!turn || !message) return null;
+    if (turn.runId) return this.deps.runtime.say(turn.runId, message);
+    const early = { id: randomUUID(), text: message };
+    turn.early.push(early);
+    return { id: early.id };
+  }
 
   turn(input: TurnInput): AsyncIterable<TurnEvent> {
     const out = new Channel<TurnEvent>();
@@ -104,6 +128,8 @@ export class ChatService {
     const conversation =
       (input.conversationId && store.conversation(input.conversationId)) || store.createConversation(titleFrom(message), now);
     const turnId = randomUUID();
+    const live: { runId?: string; early: { id: string; text: string }[] } = { early: [] };
+    this.active.set(turnId, live);
     out.push({ type: "start", conversation, turnId, at: now.toISOString(), model });
 
     const memory = recall.recall(message, conversation.id, now, input.timeZone);
@@ -128,13 +154,23 @@ export class ChatService {
     const prepared = memory.confidence === "high" || memory.confidence === "medium" ? await recheck(memory.baseline, search, book, upsert, input.signal) : "";
     if (book.sources.length) out.push({ type: "sources", sources: [...book.sources] });
     const runId = randomUUID();
+    // Messages that joined this turn while it worked: part of its question, as the model saw them.
+    // Those said before the run started are simply part of the opening question.
+    const joined: string[] = [];
+    let dequeued: string | undefined;
+    const question = () => [message, ...joined].join("\n\n");
+    for (const early of live.early.splice(0)) {
+      joined.push(early.text);
+      out.push({ type: "joined", id: early.id, text: early.text });
+    }
+    live.runId = runId;
     const searches = new Map<string, SearchInput>();
 
     const shapes = answerShapes(() => book.sources);
     // Sent as data: the checks stay here, where the sources and snapshots are.
     const endings: OutputShape[] = shapes.map(({ name, description, schema }) => ({ name, description, schema }));
     const transcript = store.transcript(conversation.id);
-    const ask = asked(message, memory.context + prepared);
+    const ask = asked(question(), memory.context + prepared);
     const fresh: Entry[] = [];
 
     // Slips of form are fixed in software; what still does not hold up is shown marked, never silently.
@@ -145,7 +181,7 @@ export class ChatService {
       id: turnId,
       conversationId: conversation.id,
       at: now.toISOString(),
-      question: message,
+      question: question(),
       answerText: answerAsText(shape, text, answer),
       // What still does not hold up after a correction is shown marked, never silently.
       lead: markUnverified((answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(), book.snapshots),
@@ -177,6 +213,12 @@ export class ChatService {
         );
         for await (const event of events) {
           if (event.type === "error") throw new Error(event.message);
+          if (event.type === "dequeued") dequeued = event.id;
+          if (event.type === "entry" && event.entry.kind === "asked" && event.entry.by === "user" && dequeued) {
+            joined.push(event.entry.text);
+            out.push({ type: "joined", id: dequeued, text: event.entry.text });
+            dequeued = undefined;
+          }
           if (event.type === "retract") {
             spoke = "";
             out.push({ type: "revise", reason: "Redoing a step" });
@@ -271,7 +313,7 @@ export class ChatService {
         const written = cardOf(prose ? ended.answer : (ended.answer as { index?: unknown } | undefined)?.index);
         const answer = prose ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
         const turn = record(prose ? "reply" : ended.shape, ended.text, answer);
-        store.append(conversation.id, settledExchange(message, now, input.timeZone, turn.shape === "reply" ? repaired(ended.text) : turn.answerText));
+        store.append(conversation.id, settledExchange(question(), now, input.timeZone, turn.shape === "reply" ? repaired(ended.text) : turn.answerText));
         store.saveTurn(turn);
         store.saveSnapshots(turn, book.snapshots);
         store.touch(conversation.id, clock.now());
@@ -290,10 +332,12 @@ export class ChatService {
       // close it with what was said, rather than leaving a half-finished tool round behind.
       const stopped = input.signal?.aborted;
       const text = spoke.trim() || (stopped ? "(stopped)" : "(something went wrong before I could answer)");
-      store.append(conversation.id, settledExchange(message, now, input.timeZone, text));
+      store.append(conversation.id, settledExchange(question(), now, input.timeZone, text));
       store.saveTurn(record("reply", text));
       store.touch(conversation.id, clock.now());
       if (!stopped) throw error;
+    } finally {
+      this.active.delete(turnId);
     }
   }
 
