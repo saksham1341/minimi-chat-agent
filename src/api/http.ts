@@ -5,6 +5,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
+import { gzipSync } from "node:zlib";
 import type { App } from "../assembly.ts";
 import { handleMcp } from "./mcp.ts";
 
@@ -15,6 +16,15 @@ const TYPES: Record<string, string> = {
 
 export function serve(app: App, staticDir: string) {
   return createServer(async (req, res) => {
+    // One line per request, for knowing what a remote browser actually fetched and how it went.
+    const started = Date.now();
+    res.on("finish", () => {
+      const bytes = res.getHeader("content-length") ?? "stream";
+      console.log(`${req.socket.remoteAddress?.replace("::ffff:", "")} ${req.method} ${req.url} ${res.statusCode} ${bytes} ${Date.now() - started}ms`);
+    });
+    res.on("close", () => {
+      if (!res.writableFinished) console.log(`${req.socket.remoteAddress?.replace("::ffff:", "")} ${req.method} ${req.url} closed before finishing after ${Date.now() - started}ms`);
+    });
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
@@ -33,7 +43,7 @@ export function serve(app: App, staticDir: string) {
         return handleMcp(app.search, req, res);
       }
       if (path.startsWith("/api/")) return json(res, { error: "not found" }, 404);
-      return file(res, staticDir, path);
+      return file(req, res, staticDir, path);
     } catch (error) {
       if (!res.headersSent) json(res, { error: (error as Error).message }, 500);
       else res.end();
@@ -89,7 +99,10 @@ function validZone(zone?: string) {
   }
 }
 
-async function file(res: ServerResponse, root: string, path: string) {
+/** Compressed once per file and kept: the build does not change while the server runs. */
+const gzipped = new Map<string, Buffer>();
+
+async function file(req: IncomingMessage, res: ServerResponse, root: string, path: string) {
   const safe = normalize(path).replace(/^(\.\.[/\\])+/, "");
   let target = join(root, safe);
   const found = await stat(target).catch(() => null);
@@ -99,7 +112,17 @@ async function file(res: ServerResponse, root: string, path: string) {
     res.writeHead(503, { "content-type": "text/plain" });
     return res.end("The web app is not built. Run `npm start` (it builds first).");
   }
-  res.writeHead(200, { "content-type": TYPES[extname(target)] ?? "application/octet-stream" });
+  const type = TYPES[extname(target)] ?? "application/octet-stream";
+  // Hashed build assets never change under the same name; the page itself must always be fresh.
+  const cache = target.includes(`${join(root, "assets")}`) ? "public, max-age=31536000, immutable" : "no-cache";
+  const compressible = /^(text|application\/json|image\/svg)/.test(type);
+  if (compressible && /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""))) {
+    let body = gzipped.get(target);
+    if (!body) gzipped.set(target, (body = gzipSync(content)));
+    res.writeHead(200, { "content-type": type, "content-encoding": "gzip", "content-length": body.length, "cache-control": cache, vary: "accept-encoding" });
+    return res.end(body);
+  }
+  res.writeHead(200, { "content-type": type, "content-length": content.length, "cache-control": cache });
   res.end(content);
 }
 

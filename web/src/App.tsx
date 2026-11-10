@@ -69,7 +69,9 @@ export function App() {
 
   const send = async (message: string) => {
     if (!modelId || busy) return;
-    const local = crypto.randomUUID();
+    // Not crypto.randomUUID: it exists only in secure contexts, and this page is often opened over
+    // plain http on a LAN or tailnet address. This id only lives until the server assigns the real one.
+    const local = `local-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setTurns((all) => [...all, pending(local, message.trim())]);
     setFocusId(null);
     setCanvasOpen(true);
