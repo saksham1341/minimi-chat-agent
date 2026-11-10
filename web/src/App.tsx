@@ -74,7 +74,7 @@ export function App() {
   // Messages sent while an answer is streaming. Each is said to the running turn at once, and the
   // agent takes it up after its next round of searches (the turn streams `joined`, and it leaves
   // the queue). One that arrives after the last search, or that the turn could not take, goes as
-  // the next question when the answer is done. Stopping, or leaving the conversation, hands them
+  // the next question, together with the rest, when the answer is done. Stopping, or leaving the conversation, hands them
   // back to the composer rather than sending or losing them.
   const [queue, setQueue] = useState<Queued[]>([]);
   const [restore, setRestore] = useState({ text: "", n: 0 });
@@ -114,12 +114,12 @@ export function App() {
     }
   };
 
-  // The next queued message goes as soon as the answer before it is finished.
+  // When the answer is finished, everything still waiting goes at once, as one message: they are
+  // things said before an answer, and sending them a turn apart would answer the first alone.
   useEffect(() => {
     if (busy || !queue.length) return;
-    const [next, ...rest] = queue;
-    setQueue(rest);
-    void run(next.text);
+    setQueue([]);
+    void run(queue.map((q) => q.text).join("\n\n"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, queue]);
 

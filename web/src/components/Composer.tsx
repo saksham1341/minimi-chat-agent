@@ -51,7 +51,7 @@ export function Composer(props: {
         <ol className="queue" aria-label="Queued messages">
           {props.queue.map((q, i) => (
             <li key={q.key} className="queued">
-              <span className="queued-label">{q.id ? "Joins after the next search" : i === 0 ? "Next" : "Then"}</span>
+              <span className="queued-label">{q.id ? "Joins after the next search" : "Next"}</span>
               <span className="queued-text">{q.text}</span>
               <button className="queued-remove" onClick={() => props.onUnqueue(i)} aria-label="Remove from queue">×</button>
             </li>
