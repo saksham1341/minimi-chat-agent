@@ -37,7 +37,13 @@ export function Turn(props: {
             Working on it in the canvas
           </button>
         ) : (
-          <Trail activity={turn.activity} notes={turn.notes} live={live} sourceCount={turn.sources.length} />
+          <Trail
+            activity={turn.activity}
+            notes={turn.notes}
+            live={live}
+            sourceCount={turn.sources.length}
+            onWork={turn.activity.some((a) => a.kind === "search" || a.kind === "recall") || turn.shape === "comparison" || turn.shape === "changes" ? onFocus : undefined}
+          />
         )}
         {turn.text && <Prose text={turn.text} sources={turn.sources} />}
         {turn.shape !== "reply" && turn.answer !== undefined && canvas && turn.shape !== "choices" ? (

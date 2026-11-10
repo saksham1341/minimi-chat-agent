@@ -6,8 +6,21 @@ import { useState } from "react";
 import type { Activity } from "../api.ts";
 import { formatDay } from "./Prose.tsx";
 
-export function Trail({ activity, notes, live, sourceCount }: { activity: Activity[]; notes: string[]; live: boolean; sourceCount: number }) {
+export function Trail({ activity, notes, live, sourceCount, onWork }: {
+  activity: Activity[];
+  notes: string[];
+  live: boolean;
+  sourceCount: number;
+  /** Opens this answer's work in the canvas, when there is a canvas to open it in. */
+  onWork?: () => void;
+}) {
   const [open, setOpen] = useState(false);
+  const work = onWork && (
+    <button className={`work-link${live ? " is-live" : ""}`} onClick={onWork}>
+      <span className="work-dot" aria-hidden />
+      {live ? "Watch it work" : "Show the work"}
+    </button>
+  );
   if (!activity.some((a) => a.kind !== "memory") && !notes.length) return live ? <div className="trail"><Line icon="dot" text="Thinking" busy /></div> : null;
 
   const recalls = activity.filter((a) => a.kind === "recall");
@@ -21,11 +34,16 @@ export function Trail({ activity, notes, live, sourceCount }: { activity: Activi
   const expanded = live || open;
   return (
     <div className={`trail${live ? " is-live" : ""}`}>
-      {!live && (
-        <button className="trail-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
-          <Chevron open={open} />
-          {summary.join(", ")}
-        </button>
+      {!live ? (
+        <div className="trail-row">
+          <button className="trail-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+            <Chevron open={open} />
+            {summary.join(", ")}
+          </button>
+          {work}
+        </div>
+      ) : (
+        work && <div className="trail-row">{work}</div>
       )}
       {expanded && (
         <ol className="trail-lines">

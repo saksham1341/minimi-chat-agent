@@ -32,6 +32,17 @@ export function App() {
   const controller = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  // The composer floats over the thread; its measured height becomes the thread's bottom padding,
+  // so the last line can always scroll clear of it (the composer grows as you type).
+  const dock = useRef<HTMLDivElement>(null);
+  const main = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = dock.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => main.current?.style.setProperty("--dock-h", `${el.offsetHeight}px`));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   const refresh = useCallback(() => api.conversations().then(setConversations).catch(() => {}), []);
 
@@ -125,18 +136,12 @@ export function App() {
     <div className={`shell${drawer ? " drawer-open" : ""}${showCanvas ? " has-canvas" : ""}${showCanvas && !roomy ? " folded" : ""}`}>
       <Sidebar conversations={conversations} currentId={conversationId} today={today} recalled={recalled} onOpen={open} onNew={startNew} />
       <button className="scrim" aria-label="Close conversations" onClick={() => setDrawer(false)} tabIndex={drawer ? 0 : -1} />
-      <main className="main">
+      <main className="main" ref={main}>
         <header className="topbar">
           <button className="menu" onClick={() => setDrawer(true)} aria-label="Show conversations">
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
           </button>
           <h1 className="topbar-title">{current?.title ?? (turns.length ? turns[0].question : "New conversation")}</h1>
-          {canvasTurn && !showCanvas && (
-            <button className={`work-button${canvasTurn.status === "streaming" ? " is-live" : ""}`} onClick={() => openCanvas()}>
-              <span className="work-dot" aria-hidden />
-              Work
-            </button>
-          )}
           <Clock now={now} />
         </header>
 
@@ -168,7 +173,7 @@ export function App() {
           )}
         </div>
 
-        <div className="dock">
+        <div className="dock" ref={dock}>
           <Composer meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
         </div>
       </main>
