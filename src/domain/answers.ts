@@ -10,7 +10,8 @@
  * question back to the person when guessing would waste their time.
  */
 import { z } from "zod";
-import { Fixes } from "./edits.ts";
+import { Citations } from "./citations.ts";
+import { Plan } from "./plan.ts";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
 import { IndexCard } from "./card.ts";
@@ -187,10 +188,12 @@ export const INDEX_SHAPE = shape(
   "Hand over the exchange's index card. Call it once; it ends the run.",
 );
 
-/** Offered only when a reply's citations are sent back: the corrections, as edits to the reply. */
-export const FIXES_SHAPE = shape(
-  "fixes",
-  Fixes,
-  "Correct your last reply in place, ending the turn. Each edit copies a passage of the reply exactly and gives what " +
-    "it becomes; everything else stays as written. Do not write the reply out again.",
+/** The citation run's one way to hand over a part's citations (`services/citer.ts`). */
+export const CITATIONS_SHAPE = shape(
+  "citations",
+  Citations,
+  "Hand over the citations for the part of the answer you were just given. Call it once per part.",
 );
+
+/** The planner's one way to hand over its plan (`services/planner.ts`). */
+export const PLAN_SHAPE = shape("searches", Plan, "Hand over the searches to run before the answer. Call it once; it ends the run.");

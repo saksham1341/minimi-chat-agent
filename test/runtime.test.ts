@@ -15,7 +15,9 @@ import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { AgentRuntimePort } from "../src/ports/runtime.ts";
 import { ModelCatalog } from "../src/services/catalog.ts";
 import { ChatService, type TurnEvent } from "../src/services/chat.ts";
+import { Citer, CITE_INSTRUCTION } from "../src/services/citer.ts";
 import { Indexer } from "../src/services/indexer.ts";
+import { citationsIn } from "../src/domain/quotes.ts";
 import { LedgerService } from "../src/services/ledger.ts";
 import { RecallService } from "../src/services/recall.ts";
 import { SearchService } from "../src/services/web-search.ts";
@@ -44,9 +46,9 @@ describe("the runtime as its own deployment", () => {
 });
 
 describe("checking a run and continuing it", () => {
-  it("sends an answer whose citations do not hold up back once, and keeps the corrected one", async () => {
+  it("sends a reply that talks about its own mechanism back once, and keeps the corrected one", async () => {
     const requests: RunRequest[] = [];
-    const replies = ['Neon costs $19 [S9abcd "Launch $19"].', "Neon's Launch plan costs $19 a month."];
+    const replies = ["The context shows you asked about Neon.", "You asked me about Neon on Monday."];
     const runtime: AgentRuntimePort = {
       models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
       say: async () => null,
@@ -59,61 +61,81 @@ describe("checking a run and continuing it", () => {
     };
     const store = new SqliteMemory(":memory:");
     const chat = new ChatService({
-      store,
-      clock: new SystemClock(),
-      models: new ModelCatalog(runtime),
-      runtime,
+      store, clock: new SystemClock(), models: new ModelCatalog(runtime), runtime,
       search: new SearchService({ name: "fake", available: true, read: async () => [], search: async () => [] }),
-      recall: new RecallService(store),
-      ledger: new LedgerService(store),
-      log: () => {},
+      recall: new RecallService(store), ledger: new LedgerService(store), log: () => {},
     });
     const events: TurnEvent[] = [];
-    for await (const e of chat.turn({ message: "What does Neon cost?", timeZone: "UTC" })) events.push(e);
+    for await (const e of chat.turn({ message: "What did I ask on Monday?", timeZone: "UTC" })) events.push(e);
     const done = events.find((e) => e.type === "done");
     expect(requests).toHaveLength(2);
     expect(requests[1].ask).toMatchObject({ by: "runtime" });
-    expect(requests[1].ask.text).toMatch(/S9abcd is not one of this answer's search results/);
-    expect(done?.type === "done" && done.turn.lead).toBe("Neon's Launch plan costs $19 a month.");
+    expect(done?.type === "done" && done.turn.lead).toBe(replies[1]);
     // Later turns replay the question and the settled answer only: the working stays out.
     const transcript = store.transcript(done?.type === "done" ? done.turn.conversationId : "");
     expect(transcript.map((e) => e.kind)).toEqual(["asked", "said"]);
-    expect(transcript[1]).toMatchObject({ text: "Neon's Launch plan costs $19 a month.", toolCalls: [] });
-    expect(events.some((e) => e.type === "revise")).toBe(true);
+    expect(transcript[1]).toMatchObject({ text: replies[1], toolCalls: [] });
   });
+});
 
-  it("corrects citations with edits in place, leaving the rest of the reply as written", async () => {
+describe("citations found while the answer is written", () => {
+  it("feeds each paragraph to a citation run that sees the same passages, and attaches what it finds", async () => {
     const requests: RunRequest[] = [];
-    const reply = 'Neon is the cheapest. Its Launch plan costs $19 [S9abcd "Launch $19"]. Supabase Pro is $25.';
+    const page = { id: "S1abcd", title: "Neon pricing", url: "https://neon.com/pricing", domain: "neon.com", text: "Launch plan: $19 per month, billed monthly. Scale plan: $69 per month." };
+    const paragraphs = ["Neon's Launch plan costs $19 a month [S1abcd].", "Scale is $69 a month [S1abcd]."];
     const runtime: AgentRuntimePort = {
       models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
       say: async () => null,
       async *run(request) {
         requests.push(request);
-        if (requests.length === 1) {
-          yield { type: "entry", entry: { kind: "said", text: reply, toolCalls: [], stopReason: "end_turn" } };
-          yield { type: "done", shape: "reply", text: reply, rounds: 1, cutShort: false };
-        } else {
-          const answer = { edits: [{ find: ' [S9abcd "Launch $19"]', replace: "" }] };
-          yield { type: "entry", entry: { kind: "said", text: "", toolCalls: [{ id: "f1", name: "answer_fixes", arguments: answer }], stopReason: "tool_use" } };
-          yield { type: "done", shape: "fixes", text: "", answer, rounds: 1, cutShort: false };
+        if (request.instruction === CITE_INSTRUCTION) {
+          const part = request.ask.text;
+          const citations = [
+            ...(part.includes("Launch plan costs") ? [{ after: "Launch plan costs $19 a month", sources: [{ id: "S1abcd", quote: "Launch plan: $19 per month" }] }] : []),
+            ...(part.includes("Scale is") ? [{ after: "Scale is $69 a month", sources: [{ id: "S1abcd", quote: "Scale plan: $69 per month" }] }] : []),
+          ];
+          yield { type: "entry", entry: { kind: "said", text: "", toolCalls: [{ id: `c${requests.length}`, name: "answer_citations", arguments: { citations } }], stopReason: "tool_use" } };
+          yield { type: "done", shape: "citations", text: "", answer: { citations }, rounds: 1, cutShort: false };
+          return;
         }
+        // The answering run: one search, then the answer, written paragraph by paragraph.
+        const call = { id: "q1", name: "web_search", arguments: { query: "neon pricing" } };
+        yield { type: "entry", entry: { kind: "said", text: "", toolCalls: [call], stopReason: "tool_use" } };
+        yield { type: "entry", entry: { kind: "ran", results: [{ callId: "q1", name: "web_search", content: "…", failed: false, data: { results: [page], cached: false } }] } };
+        const text = paragraphs.join("\n\n");
+        for (const piece of [paragraphs[0], "\n\n", paragraphs[1]]) {
+          yield { type: "delta", delta: { type: "text", text: piece } };
+          await new Promise((r) => setTimeout(r, 5));
+        }
+        yield { type: "entry", entry: { kind: "said", text, toolCalls: [], stopReason: "end_turn" } };
+        yield { type: "done", shape: "reply", text, rounds: 2, cutShort: false };
       },
     };
     const store = new SqliteMemory(":memory:");
     const chat = new ChatService({
       store, clock: new SystemClock(), models: new ModelCatalog(runtime), runtime,
       search: new SearchService({ name: "fake", available: true, read: async () => [], search: async () => [] }),
-      recall: new RecallService(store), ledger: new LedgerService(store), log: () => {},
+      recall: new RecallService(store), ledger: new LedgerService(store), citer: new Citer({ runtime, log: () => {} }), log: () => {},
     });
     const events: TurnEvent[] = [];
-    for await (const e of chat.turn({ message: "Cheapest Postgres host?", timeZone: "UTC" })) events.push(e);
-    expect(requests[1].endings.map((e) => e.name)).toEqual(["fixes"]);
-    const expected = "Neon is the cheapest. Its Launch plan costs $19. Supabase Pro is $25.";
-    expect(events.find((e) => e.type === "patch")).toMatchObject({ text: expected });
-    expect(events.some((e) => e.type === "revise")).toBe(false);
-    const done = events.find((e) => e.type === "done");
-    expect(done?.type === "done" && done.turn.lead).toBe(expected);
+    for await (const e of chat.turn({ message: "What does Neon cost?", timeZone: "UTC" })) events.push(e);
+    const cites = requests.filter((r) => r.instruction === CITE_INSTRUCTION);
+    // It read exactly the passage the answer was written from, and nothing was sent back to the answer.
+    expect(cites[0].ask.text).toContain(page.text);
+    expect(requests.filter((r) => r.instruction !== CITE_INSTRUCTION)).toHaveLength(1);
+    // One run per paragraph, in parallel, and the answer was done before its citations landed.
+    expect(cites).toHaveLength(2);
+    const done = events.findIndex((e) => e.type === "done");
+    const last = events.at(-1);
+    expect(last?.type).toBe("patch");
+    expect(events.findLastIndex((e) => e.type === "patch")).toBeGreaterThan(done);
+    const conversationId = (events[done] as Extract<TurnEvent, { type: "done" }>).turn.conversationId;
+    const lead = store.turns(conversationId)[0].lead;
+    expect(last?.type === "patch" && last.text).toBe(lead);
+    expect(citationsIn(lead)).toEqual([
+      { id: "S1abcd", quote: "Launch plan: $19 per month", verified: true },
+      { id: "S1abcd", quote: "Scale plan: $69 per month", verified: true },
+    ]);
   });
 });
 

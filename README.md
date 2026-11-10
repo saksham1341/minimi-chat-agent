@@ -16,7 +16,7 @@ The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?")
 2. **Resolving a reference, in software.** Every past day's names are generated from the calendar ("yesterday", "last tuesday", "3 november", "a week or so back") and matched, with the cards' terms, against the message's word sequences; within a named day, the topic decides. The model gets the likely exchanges with their age, a stated confidence and reason, and their original facts as the baseline, plus a calendar of counts, never titles, so a title cannot pass for a memory.
 3. **Re-checking by quote.** For a confident match, software re-reads the pages the original facts came from and looks each quote up word for word (still there, or gone with the closest passage now) before the model starts.
 4. **The run.** The agent runtime (`src/agents/`) holds the loop, the models and every credential, and reaches the one tool, `web_search`, only over MCP. The `answer_*` calls are not tools: they hand over a structured answer (a comparison or a what-changed report), since tool arguments are where providers enforce a schema.
-5. **Checked citations.** The model cites a page's stable id with the exact words it relied on: `[S3f2a1 "$1.50/branch-month"]`. Each quote must be on the page and state the sentence's price, percentage or version, or it shows as unverified. Slips of form are repaired in software; real misses go back once, and come back as edits applied in place, not a rewrite.
+5. **Citations found, then checked.** The answer only tags each fact with its page, `[S3f2a1]`. As each paragraph is written, a short run on a light model (Haiku) finds the exact words on that page's passage that state the claim, and they are attached while the answer is still streaming. Each quote must be in the passage and state the sentence's price, percentage or version, or it shows as unverified. Nothing is ever sent back for a rewrite.
 6. **Answers as a trust boundary.** Later turns replay each question and the answer as given, citations tagged, without the pages. When a follow-up needs more of a cited page, the model reads it back by id (`web_search` with `pages`), as kept that day or live.
 7. **Working in the open.** What the model writes before a search shows as working notes, folded away when the answer lands. A message sent meanwhile joins the run after its next round of searches, the one point it can enter without breaking an exchange the model is owed; later, it goes as the next question.
 
@@ -26,7 +26,7 @@ The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?")
 - **A driver and a backend.** The runtime holds the models and keys and reaches the backend only over MCP, as any agent would: point Claude Code at `/mcp` and it gets the same search. The backend never holds a model key. It runs in-process by default or as its own deployment (`APP_AGENTS=remote`). Inside the backend: ports and adapters, import direction enforced by a test.
 - **Feeling fast is design too.** Activity shows in under 0.1 s, working notes from about 2 s, and search lanes as the model types each query.
 
-Measured on Sonnet 4.5 via Bedrock: memory-only answers 4–6 s; a searched answer 18 s; a follow-up reading back cited pages 20 s; a re-check of an earlier comparison 38 s; a fresh comparison about 45 s.
+Measured on Sonnet 4.5 (answers) and Haiku 4.5 (citations, index cards) via Bedrock: memory-only answers 4–7 s; a searched answer about 17 s, its last citations about 3 s later; a fresh comparison about 35 s.
 
 ## Considered and rejected
 
@@ -41,6 +41,6 @@ Measured on Sonnet 4.5 via Bedrock: memory-only answers 4–6 s; a searched answ
 ## With another week
 
 - **Evals:** dated multi-session scripts on a frozen clock, scoring resolution, quote validity and verdicts.
-- **A faster model for lookups:** most of the wait is Sonnet 4.5 writing.
+- **Search planning on a faster light model:** built (`PLAN_SEARCHES`), off because Bedrock Haiku plans no faster than Sonnet's own first round.
 - **Scheduled re-checks of the ledger** with the same quote diff.
 - **Sign-in and per-person memory.**

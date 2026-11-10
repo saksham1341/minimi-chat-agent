@@ -25,6 +25,7 @@ import { readTurn, toolsToWire, toWire, withJsonRetry } from "./claude-wire.ts";
 
 export const PROVIDER = "bedrock";
 export const SONNET_4_5 = "global.anthropic.claude-sonnet-4-5-20250929-v1:0";
+export const HAIKU_4_5 = "global.anthropic.claude-haiku-4-5-20251001-v1:0";
 
 /**
  * How much thinking each effort buys, in tokens: words at the port, numbers here. `low` buys none:
@@ -87,6 +88,7 @@ export class BedrockModel implements ChatModel {
 
 const KNOWN: Record<string, { label: string; hint: string }> = {
   [SONNET_4_5]: { label: "Claude Sonnet 4.5 (Bedrock)", hint: "Through AWS Bedrock. Strong all-rounder." },
+  [HAIKU_4_5]: { label: "Claude Haiku 4.5 (Bedrock)", hint: "Through AWS Bedrock. Fastest; simple lookups." },
 };
 
 /** The Bedrock models offered when AWS credentials and a region are configured. */

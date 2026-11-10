@@ -37,11 +37,13 @@ export class ExaSearch implements SearchProvider {
         numResults: q.maxResults,
         ...(q.since ? { startPublishedDate: `${q.since}T00:00:00.000Z` } : {}),
         ...(q.domains?.length ? { includeDomains: q.domains } : {}),
+        // Passages, not pages: what the model reads is what it answers from, and every character
+        // of it is time before the first word. A general search wants breadth, so a few ranked
+        // passages per page and its opening. A targeted read (one site, or live) is reading a page
+        // for its facts, and pricing tables come through badly as sentences, so it keeps more.
         contents: {
-          highlights: { query: q.query },
-          // A targeted read (one site, or live) is reading a page for its facts: pricing tables need
-          // room. A general search wants breadth, so short passages from more pages.
-          text: { maxCharacters: q.domains?.length || q.fresh ? 5000 : 800 },
+          highlights: { query: q.query, numSentences: targeted(q) ? 4 : 3, highlightsPerUrl: targeted(q) ? 6 : 3 },
+          text: { maxCharacters: targeted(q) ? 3000 : 300 },
           ...(q.fresh ? { maxAgeHours: 0, livecrawlTimeout: 8000 } : {}),
         },
       }),
@@ -55,7 +57,9 @@ export class ExaSearch implements SearchProvider {
       url: r.url,
       published: r.publishedDate?.slice(0, 10),
       // Highlights are the passages that match the query; the opening of the page gives context.
-      excerpt: [...(r.highlights ?? []), r.text ?? ""].filter(Boolean).join("\n…\n").slice(0, q.domains?.length || q.fresh ? 6000 : 1500),
+      excerpt: [...(r.highlights ?? []), r.text ?? ""].filter(Boolean).join("\n…\n").slice(0, targeted(q) ? 5000 : 1200),
     }));
   }
 }
+
+const targeted = (q: SearchQuery) => !!(q.domains?.length || q.fresh);

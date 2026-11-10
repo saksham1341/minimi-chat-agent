@@ -20,6 +20,8 @@ export interface MemoryStore {
   append(conversationId: string, entries: Entry[]): void;
 
   saveTurn(turn: TurnRecord): void;
+  /** The turn's answer once its citations have landed, after it was first saved. */
+  updateTurn(turn: TurnRecord): void;
   turns(conversationId: string): TurnRecord[];
   /** Turns asked within [from, to), across all conversations, oldest first. */
   turnsBetween(from: Date, to: Date, limit: number): TurnRecord[];

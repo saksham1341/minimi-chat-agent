@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEdits } from "../src/domain/edits.ts";
+import { attachCitations } from "../src/domain/citations.ts";
 import { bareCitations, citationsIn, malformedCitations, markUnverified, quoteFound, quoteProblems, repairCitations, withoutQuotes } from "../src/domain/quotes.ts";
 
 const page = "Pricing. **Starter** — $20/seat/month, billed monthly. Professional: $100 per seat per month, billed annually.";
@@ -86,10 +86,26 @@ describe("a quote has to support its sentence's figure", () => {
   });
 });
 
-describe("corrections as edits", () => {
-  it("changes only the passages named, and reports the ones it cannot find", () => {
-    const r = applyEdits("A is $5 [S1]. B is $7 [S2].", [{ find: "$5 [S1]", replace: '$6 [S1 "$6/mo"]' }, { find: "C is", replace: "D is" }]);
-    expect(r.text).toBe('A is $6 [S1 "$6/mo"]. B is $7 [S2].');
-    expect(r.missed).toHaveLength(1);
+describe("citations found by the citation run", () => {
+  it("attach where each claim ends, replacing the page tag the answer wrote there", () => {
+    const answer = "Starter is $20 a seat [S1]. Pro is $100 [S1]. Support is email only.";
+    const cited = attachCitations(answer, [
+      { after: "Pro is $100", sources: [{ id: "S1", quote: "Professional: $100 per seat per month" }] },
+      { after: "Starter is $20 a seat", sources: [{ id: "S1", quote: '$20/seat/month, "billed" monthly' }] },
+      { after: "words that are not there", sources: [{ id: "S1", quote: "anything" }] },
+    ]);
+    expect(cited).toBe('Starter is $20 a seat [S1 "$20/seat/month, \'billed\' monthly"]. Pro is $100 [S1 "Professional: $100 per seat per month"]. Support is email only.');
+    expect(citationsIn(cited).map((c) => c.verified)).toEqual([true, true]);
+  });
+
+  it("replace the tags even when the claim's words were copied on into them", () => {
+    const answer = "- Pro: $100/month [S1][S2]\n- Starter: $20";
+    const cited = attachCitations(answer, [{ after: "Pro: $100/month [S1][S2]", sources: [{ id: "S1", quote: "Professional: $100 per seat per month" }] }]);
+    expect(cited).toBe('- Pro: $100/month [S1 "Professional: $100 per seat per month"]\n- Starter: $20');
+  });
+
+  it("leave a claim with no supporting page as the answer wrote it", () => {
+    const answer = "Starter is $20 a seat [S1].";
+    expect(attachCitations(answer, [{ after: "Starter is $20 a seat", sources: [] }])).toBe(answer);
   });
 });

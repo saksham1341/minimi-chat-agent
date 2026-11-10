@@ -2,7 +2,7 @@
  * The runtime's own settings. It holds every model credential; the application holds none.
  */
 import { anthropicModels } from "./models/anthropic.ts";
-import { bedrockClient, bedrockModels, SONNET_4_5 } from "./models/bedrock.ts";
+import { bedrockClient, bedrockModels, HAIKU_4_5, SONNET_4_5 } from "./models/bedrock.ts";
 import type { ChatModel } from "./ports.ts";
 import { AgentRuntime } from "./runtime.ts";
 
@@ -20,7 +20,8 @@ export function runtimeFromEnv(env: NodeJS.ProcessEnv, toolServer?: string): Age
       secretKey: blank(env.AWS_SECRET_ACCESS_KEY),
       sessionToken: blank(env.AWS_SESSION_TOKEN),
     });
-    const ids = (blank(env.BEDROCK_MODELS) ?? SONNET_4_5).split(",").map((m) => m.trim()).filter(Boolean);
+    // Sonnet first (the default for answers), Haiku beside it (the light work: citations, cards, search plans).
+    const ids = (blank(env.BEDROCK_MODELS) ?? `${SONNET_4_5},${HAIKU_4_5}`).split(",").map((m) => m.trim()).filter(Boolean);
     models.push(...bedrockModels(client, ids, effort));
   }
   const anthropic = blank(env.ANTHROPIC_API_KEY);

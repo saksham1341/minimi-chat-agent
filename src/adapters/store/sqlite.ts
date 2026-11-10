@@ -100,6 +100,10 @@ export class SqliteMemory implements MemoryStore {
       .run(t.id, t.conversationId, t.at, t.question, t.answerText, t.lead, t.shape, t.answer === undefined ? null : JSON.stringify(t.answer), JSON.stringify(t.sources), JSON.stringify(t.activity), t.model);
   }
 
+  updateTurn(t: TurnRecord) {
+    this.db.prepare("update turns set answer_text = ?, lead = ?, sources = ? where id = ?").run(t.answerText, t.lead, JSON.stringify(t.sources), t.id);
+  }
+
   turns(conversationId: string) {
     return (this.db.prepare("select * from turns where conversation_id = ? order by at").all(conversationId) as Row[]).map(toTurn);
   }

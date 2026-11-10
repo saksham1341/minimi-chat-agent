@@ -70,8 +70,6 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, draft: turn.text || turn.draft || "", revising: event.reason, text: "", settled: false };
     case "joined":
       return { ...turn, joined: [...turn.joined, event.text] };
-    case "fixing":
-      return { ...turn, revising: event.reason, settled: false };
     case "patch":
       return { ...turn, text: event.text, fixed: event.fixed, revising: undefined, settled: true };
     case "searching":

@@ -18,9 +18,9 @@ import { asked } from "../agents/conversation.ts";
 import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, type OutputShape } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
-import { applyEdits, Fixes } from "../domain/edits.ts";
-import { answerShapes, FIXES_SHAPE, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
-import { bareCitations, citationsIn, describeProblems, markUnverified, quoteFound, quoteProblems, repairCitations } from "../domain/quotes.ts";
+import { attachCitations } from "../domain/citations.ts";
+import { answerShapes, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
+import { citationsIn, markUnverified, quoteFound, repairCitations } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
 import { describeNow } from "../domain/time.ts";
@@ -29,12 +29,14 @@ import type { MemoryStore } from "../ports/memory.ts";
 import type { AgentRuntimePort } from "../ports/runtime.ts";
 import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
+import type { Citer, CiteSession, Page } from "./citer.ts";
+import type { Planner } from "./planner.ts";
 import type { Indexer } from "./indexer.ts";
 import type { LedgerService } from "./ledger.ts";
 import { recheck } from "./recheck.ts";
-import type { RecallService } from "./recall.ts";
+import type { Recollection, RecallService } from "./recall.ts";
 import { SourceBook } from "./sources.ts";
-import { SEARCH_TOOL, type SearchInput, type SearchResult, type SearchService } from "./web-search.ts";
+import { formatResults, SEARCH_TOOL, type SearchInput, type SearchResult, type SearchService } from "./web-search.ts";
 
 export type TurnEvent =
   | { type: "start"; conversation: Conversation; turnId: string; at: string; model: ModelInfo }
@@ -47,8 +49,6 @@ export type TurnEvent =
   | { type: "searching" }
   /** What was streamed is being redone (a correction, or a tool call written as text): keep it on screen as a draft until the new text arrives. */
   | { type: "revise"; reason: string }
-  /** The reply's citations are being corrected in place; the reply stays on screen. */
-  | { type: "fixing"; reason: string }
   /** The corrected reply, and the sources whose citations changed, to show where. */
   | { type: "patch"; text: string; fixed: string[] }
   /** A message sent while this turn was working has joined it, after a round of searches. */
@@ -67,6 +67,8 @@ export interface TurnInput {
 
 /** How many times a run is continued to fix what the checks found. */
 const MAX_CORRECTIONS = 1;
+/** How long, after the answer is written, its citations may take to arrive. */
+const CITE_DEADLINE_MS = 20_000;
 
 export class ChatService {
   /**
@@ -85,6 +87,10 @@ export class ChatService {
       search: SearchService;
       recall: RecallService;
       ledger: LedgerService;
+      /** Plans and runs the message's searches before the answer starts. Without one, the answering model searches itself. */
+      planner?: Planner;
+      /** Finds the answer's citations while it is written. Without one, the answer's page tags stand alone. */
+      citer?: Citer;
       /** Writes each turn's index card in the background. Without one, software's card is written at once. */
       indexer?: Indexer;
       log: (message: string) => void;
@@ -119,11 +125,13 @@ export class ChatService {
   }
 
   private async run(input: TurnInput, out: Channel<TurnEvent>) {
-    const { store, clock, models, runtime, search, recall, ledger, indexer, log } = this.deps;
+    const { store, clock, models, runtime, search, recall, ledger, indexer, citer, log } = this.deps;
     const message = input.message.trim().slice(0, 8000);
     if (!message) throw new Error("Say something first.");
 
     const model = await models.pick(input.modelId);
+    // The light model does the work around the answer: citations, the index card.
+    const light = await models.light();
     const now = clock.now();
     const conversation =
       (input.conversationId && store.conversation(input.conversationId)) || store.createConversation(titleFrom(message), now);
@@ -151,7 +159,13 @@ export class ChatService {
 
     // When the message most likely points at an earlier answer, re-read the pages its facts came
     // from and diff its quotes, before the model starts (a few seconds at most).
-    const prepared = memory.confidence === "high" || memory.confidence === "medium" ? await recheck(memory.baseline, search, book, upsert, input.signal) : "";
+    // Meanwhile, the searches the message needs are planned by the light model and run in parallel,
+    // so the answering model starts with results in hand rather than spending a round asking.
+    const [rechecked, searched] = await Promise.all([
+      memory.confidence === "high" || memory.confidence === "medium" ? recheck(memory.baseline, search, book, upsert, input.signal) : Promise.resolve(""),
+      this.fanOut(message, conversation.id, memory, light, now, input.timeZone, book, upsert, input.signal),
+    ]);
+    const prepared = rechecked + searched;
     if (book.sources.length) out.push({ type: "sources", sources: [...book.sources] });
     const runId = randomUUID();
     // Messages that joined this turn while it worked: part of its question, as the model saw them.
@@ -201,14 +215,52 @@ export class ChatService {
     let history: Entry[] = transcript;
     let next = ask;
     let corrections = 0;
-    // A citation correction comes back as edits to the reply: the reply waits here meanwhile.
-    let patching: { shape: string; text: string; answer?: unknown } | undefined;
-    let runEndings = endings;
+    // Citations are found by a second run while the answer is written (`services/citer.ts`): it is
+    // fed each paragraph as it completes, and what it finds is attached on screen behind the text.
+    let cite: CiteSession | undefined;
+    let fed = 0;
+    let shown = 0;
+    const pagesOf = (ids: Iterable<string>): Page[] =>
+      [...new Set(ids)].flatMap((id) => {
+        const source = book.sources.find((x) => x.id === id);
+        const text = book.snapshots.get(id);
+        return source && text ? [{ id, title: source.title, domain: source.domain, text }] : [];
+      });
+    const tagged = (text: string) => citationsIn(text).map((c) => c.id);
+    const feed = (final: boolean) => {
+      if (!citer) return;
+      while (fed < spoke.length) {
+        const cut = final ? spoke.length : spoke.indexOf("\n\n", fed);
+        if (cut < 0) return;
+        const part = spoke.slice(fed, cut).trim();
+        fed = final ? spoke.length : cut + 2;
+        if (!part) continue;
+        if (!cite) {
+          shown = 0;
+          cite = citer.begin({
+            model: light,
+            question: question(),
+            onFound: (found) => {
+              const fixed = [...new Set(found.slice(shown).flatMap((f) => f.sources.map((x) => x.id)))];
+              shown = found.length;
+              out.push({ type: "patch", text: markUnverified(repaired(attachCitations(spoke, found)), book.snapshots), fixed });
+            },
+          });
+        }
+        // Exactly what the answering model read for the pages this paragraph tags.
+        cite.push(part, pagesOf(tagged(part)));
+      }
+    };
+    const dropCitations = () => {
+      cite?.abort();
+      cite = undefined;
+      fed = 0;
+    };
     try {
       while (true) {
         let ended: { shape: string; text: string; answer?: unknown; cutShort: boolean } | undefined;
         const events = runtime.run(
-          { runId, model: model.id, instruction: INSTRUCTION, history, ask: next, endings: runEndings },
+          { runId, model: model.id, instruction: INSTRUCTION, history, ask: next, endings },
           input.signal,
         );
         for await (const event of events) {
@@ -221,24 +273,24 @@ export class ChatService {
           }
           if (event.type === "retract") {
             spoke = "";
+            dropCitations();
             out.push({ type: "revise", reason: "Redoing a step" });
           } else if (event.type === "delta") {
             const d = event.delta;
             if (d.type === "text") {
               spoke += d.text;
-              // While fixing, the reply on screen stays put; what the model says around its edits is not the answer.
-              if (!patching) out.push({ type: "text", text: d.text });
+              out.push({ type: "text", text: d.text });
+              feed(false);
             } else if (d.type === "thinking") {
               out.push({ type: "thinking", text: d.text });
             } else if (d.type === "tool_input" && d.name === SEARCH_TOOL.name) {
               // The query as the model writes it: a lane on screen before the search is even sent.
               const q = (d.partial as { query?: string } | null)?.query;
               if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
-            } else if (patching) {
-              // The fix's own calls (its edits, any search) change nothing on screen until applied.
             } else if (d.type === "tool_start") {
               // Whatever was said before a tool call is a note on the way, not the answer.
               spoke = "";
+              dropCitations();
               out.push({ type: "searching" });
             } else if (d.type === "tool_input" && d.name.startsWith(ENDING_PREFIX)) {
               out.push({ type: "shape", shape: d.name.slice(ENDING_PREFIX.length), partial: d.partial });
@@ -257,45 +309,24 @@ export class ChatService {
         }
         if (!ended) throw new Error("The agent runtime stopped without an answer.");
 
-        if (patching) {
-          const fix = ended.shape === FIXES_SHAPE.name ? Fixes.safeParse(ended.answer) : undefined;
-          if (fix?.success) {
-            const { text, applied, missed } = applyEdits(patching.text, fix.data.edits);
-            log(`fixes: ${applied.length} applied, ${missed.length} missed`);
-            out.push({
-              type: "patch",
-              text: markUnverified(repaired(text), book.snapshots),
-              fixed: [...new Set(citationsIn(applied.map((e) => e.replace).join(" ")).map((c) => c.id))],
-            });
-            ended = { ...patching, text, cutShort: ended.cutShort };
-          } else if (ended.shape === "reply" && ended.text.trim()) {
-            // It wrote the reply out again after all: shown as a revision, the card from the first one kept.
-            out.push({ type: "revise", reason: "Rewriting" });
-            out.push({ type: "text", text: ended.text });
-            ended = { ...patching, text: ended.text, cutShort: ended.cutShort };
-          } else {
-            ended = { ...patching, cutShort: ended.cutShort };
-          }
-          patching = undefined;
+        // The answer is written: its last paragraph goes to the citation runs, which finish after
+        // the answer is done (the person does not wait for them).
+        let citing: CiteSession | undefined;
+        if (ended.shape === "reply") {
+          feed(true);
+          citing = cite;
+          cite = undefined;
+          fed = 0;
         }
 
-        const problem = this.check(ended, shapes, book);
+        const problem = this.check(ended, shapes);
         if (problem && corrections++ < MAX_CORRECTIONS) {
           log(`correction: ${problem.split("\n").slice(0, 3).join(" ").slice(0, 300)}`);
           // Continue the run with the correction: the model sees what it said and why it was sent back.
           history = [...transcript, ask, ...fresh];
-          if (ended.shape === "reply" && problem.startsWith("Some citations")) {
-            // Fixed in place: the model sends edits, the rest of the reply stands as written.
-            patching = { shape: ended.shape, text: ended.text, answer: ended.answer };
-            runEndings = [{ name: FIXES_SHAPE.name, description: FIXES_SHAPE.description, schema: FIXES_SHAPE.schema }];
-            next = asked(`${problem}\nFix only these, in place, with answer_fixes. Search first if you need a source that says it.`, undefined, "runtime");
-            const n = problem.split("\n").filter((l) => l.startsWith("- ")).length;
-            out.push({ type: "fixing", reason: `Fixing ${n} citation${n === 1 ? "" : "s"}` });
-          } else {
-            runEndings = endings;
-            next = asked(problem, undefined, "runtime");
-            out.push({ type: "revise", reason: "Rewording" });
-          }
+          citing?.abort();
+          next = asked(problem, undefined, "runtime");
+          out.push({ type: "revise", reason: "Rewording" });
           fresh.push(next);
           spoke = "";
           continue;
@@ -311,15 +342,26 @@ export class ChatService {
         out.push({ type: "done", turn, cutShort: ended.cutShort });
         const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
         log(
-          `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (re-checked quotes)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
+          `turn ${turn.id.slice(0, 8)} ${model.label}${rechecked ? " (re-checked quotes)" : ""}${searched ? " (searches planned)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
             `${book.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
         );
+        // The person has the answer. Its citations land now, and the saved turn takes them.
+        let final = turn;
+        if (citing?.parts) {
+          const found = await citing.finish(CITE_DEADLINE_MS);
+          if (found.length) {
+            final = record("reply", attachCitations(ended.text, found));
+            store.updateTurn(final);
+            store.saveSnapshots(final, book.snapshots);
+            out.push({ type: "patch", text: final.lead, fixed: [] });
+          }
+        }
         // A default card now, from the topics the answer marked; the indexer's run replaces it in
-        // the background, with the context a full card needs. The person already has the answer.
-        const earlier = store.turns(conversation.id).filter((t) => t.id !== turn.id);
+        // the background, with the context a full card needs.
+        const earlier = store.turns(conversation.id).filter((t) => t.id !== final.id);
         const matched = memory.activity.flatMap((a) => (a.kind === "memory" ? a.exchanges : []));
-        ledger.record(turn);
-        if (indexer) void indexer.index(turn, { earlier, matched, confidence: memory.confidence, timeZone: input.timeZone });
+        ledger.record(final);
+        if (indexer) void indexer.index(final, { model: light, earlier, matched, confidence: memory.confidence, timeZone: input.timeZone });
         return;
       }
     } catch (error) {
@@ -334,6 +376,51 @@ export class ChatService {
     } finally {
       this.active.delete(turnId);
     }
+  }
+
+  /**
+   * Plans the message's searches with the light model and runs them all at once. Their results are
+   * entered like any search's (sources, snapshots, lanes on screen) and handed to the answering
+   * model in a <searched> block, in the same form its own searches return.
+   */
+  private async fanOut(
+    message: string,
+    conversationId: string,
+    memory: Recollection,
+    light: string,
+    now: Date,
+    tz: string,
+    book: SourceBook,
+    upsert: (a: Activity) => void,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const { planner, search, store } = this.deps;
+    if (!planner || !search.available) return "";
+    const last = store.turns(conversationId).at(-1);
+    const matched = memory.activity.flatMap((a) => (a.kind === "memory" ? a.exchanges : []));
+    const context = [
+      `Now: ${describeNow(now, tz)}.`,
+      ...(last ? [`Earlier in this conversation they asked: ${last.question.slice(0, 300)}`, `and were answered: ${last.answerText.slice(0, 500)}`] : []),
+      ...(matched.length ? [`Memory matched the message (${memory.confidence} confidence) to earlier questions: ${matched.map((m) => `"${m.question.slice(0, 160)}"`).join("; ")}`] : []),
+    ].join("\n");
+    const plan = await planner.plan({ model: light, message, context });
+    if (!plan.length || signal?.aborted) return "";
+    const blocks = await Promise.all(
+      plan.map(async (args, i) => {
+        const lane: Activity = { kind: "search", id: `plan-${i}`, query: args.query ?? "", since: args.since, domains: args.domains, fresh: args.fresh };
+        upsert(lane);
+        try {
+          const found = await search.search(args, signal);
+          const ids = book.enter(found.results, args);
+          upsert({ ...lane, results: ids.length, hits: ids, ...(found.cached ? { reused: true } : {}) });
+          return `Search: ${args.query}${args.domains?.length ? ` (on ${args.domains.join(", ")})` : ""}\n${formatResults(found.results, args.since)}`;
+        } catch (error) {
+          upsert({ ...lane, failed: (error as Error).message.slice(0, 200) });
+          return `Search: ${args.query}\nFailed: ${(error as Error).message.slice(0, 200)}`;
+        }
+      }),
+    );
+    return `\n\n<searched written-by="system">\nSearches run for this message before you started, with their results:\n\n${blocks.join("\n\n")}\n</searched>`;
   }
 
   /**
@@ -370,22 +457,17 @@ export class ChatService {
    * a shape's schema and evidence; a reply's citations (proportionate: a citation standing in for
    * the fact, a malformed one or an unknown source always; quote misses only beyond two).
    */
-  private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[], book: SourceBook): string | null {
+  private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[]): string | null {
     if (ended.shape !== "reply") {
       const shape = shapes.find((s) => s.name === ended.shape);
       const result = shape?.parse?.(ended.answer);
       return result && !result.ok ? `Your answer_${ended.shape} call did not hold up: ${result.error}` : null;
     }
     // The mechanism is not the person's business: "the context shows…" goes back to be said plainly.
+    // Citations never send an answer back: the citation run attaches them, and a quote that does
+    // not hold up is shown as unverified.
     const leak = MECHANISM.find((m) => ended.text.toLowerCase().includes(m));
-    if (leak) return `Your reply mentions "${leak}". Speak as someone who remembers (or does not), never about context, memory or calendars as a mechanism. Give the whole answer again.`;
-    const text = repairCitations(ended.text, book.snapshots);
-    const misses = quoteProblems(citationsIn(text), book.snapshots);
-    // Only what software cannot fix goes back: a source that was never found, a citation standing in for the fact.
-    const structural = [...misses.filter((p) => p.reason === "unknown source"), ...bareCitations(text)];
-    const quoteMisses = misses.filter((p) => p.reason !== "unknown source");
-    const problems = structural.length || quoteMisses.length > 2 ? [...structural, ...quoteMisses] : [];
-    return problems.length ? describeProblems(problems) : null;
+    return leak ? `Your reply mentions "${leak}". Speak as someone who remembers (or does not), never about context, memory or calendars as a mechanism. Give the whole answer again.` : null;
   }
 }
 

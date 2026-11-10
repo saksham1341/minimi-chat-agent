@@ -31,6 +31,8 @@ export const INDEX_INSTRUCTION = `You index one exchange between a person and an
 - facts: only for a prose answer. Each checkable fact it states from a cited source (prices, limits, dates, versions, launches): the subject, specific ("Neon, Launch plan"); the value as stated, with its figure and unit; the source id it cited; and the exact quoted words of that citation. Never a fact the answer did not state. Empty for a table or what-changed answer, whose cells are recorded separately.`;
 
 export interface IndexContext {
+  /** The model that writes the card: the light one. */
+  model: string;
   /** This conversation's earlier exchanges, oldest first. */
   earlier: TurnRecord[];
   /** Earlier exchanges from other conversations that memory matched the question to. */
@@ -52,7 +54,7 @@ export class Indexer {
     try {
       const events = runtime.run({
         runId: randomUUID(),
-        model: turn.model,
+        model: context.model,
         instruction: INDEX_INSTRUCTION,
         history: [],
         ask: asked(brief(turn, context)),

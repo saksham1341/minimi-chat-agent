@@ -39,14 +39,14 @@ The backend's MCP endpoint (`/mcp`, stateless, loopback-only by default) serves 
    - the ask carries the context blocks;
    - the endings are the answer shapes, sent as plain JSON schemas.
 4. **Observation.** The run streams deltas and entries. The chat service reads them for the screen (search lanes, notes, sources) and keeps each page's text as a snapshot.
-5. **Checks** when the run ends. Answer shapes are validated, citations are checked against snapshots, and replies that talk about "the context" are caught. A problem continues the run once (`MAX_CORRECTIONS = 1`); see Citations.
+5. **Checks** when the run ends. Answer shapes are validated, and replies that talk about "the context" are caught; either continues the run once (`MAX_CORRECTIONS = 1`). Citations never do: they are found by a second run while the answer is written, and checked by lookup (see Citations).
 6. **Record.** The turn is saved as the person saw it. The transcript gets the question and the settled answer only (see Replay). The person has the answer now. Then, in the background, the indexer writes the index card and the ledger stores it with the facts.
 
 The screen gets a vocabulary of its own (`TurnEvent`), not the provider's:
 - `start`, `activity`, `sources`;
 - `text` and `thinking`;
 - `searching`, the point where text before a tool call becomes a working note;
-- `revise`, `fixing`, `patch`;
+- `revise`, and `patch` (citations attached in place);
 - `joined`, `shape`, `done`, `error`.
 
 ## The loop
@@ -102,13 +102,18 @@ The composer previews the same matching as you type (`GET /api/recall`, memory o
 
 ## Citations
 
-Search results carry stable ids derived from the URL (`S` + digit + 4 hex), so a page has the same id in every search and every conversation. The model cites with the exact words it relied on: `[S3f2a1 "$1.50/branch-month"]`. The chat service keeps every page's text as a snapshot and checks quotes by lookup, not by judgement (`domain/quotes.ts`). The lookup ignores case, whitespace, curly quotes, dashes and markdown, and lets "..." stand for words left out.
+Search results carry stable ids derived from the URL (`S` + digit + 4 hex), so a page has the same id in every search and every conversation. What the model reads of each result is a few ranked passages, not the page (more for a vendor-page read, where tables need room), and that exact text is kept as the snapshot every quote is checked against.
 
-- **Repaired in software**, at no cost (`repairCitations`): words without quote marks become a quote if they are on the page, or a plain marker if not; a citation repeated back to back is written once.
-- **Marked unverified**, shown as such, no rewrite (`markUnverified`): a quote that isn't on the page, or one that doesn't state the price, percentage or version of the sentence it supports. Citations side by side support their sentence together.
-- **Sent back once:** an id that was never a result, a citation standing in for the fact ("Price: [S1 …]"), or more than two misses.
+**Found by a second run, not written by the answer** (`services/citer.ts`, `domain/citations.ts`):
+- The answering model tags each fact with its page, `[S3f2a1]`, and writes no quotes. Less to write, and nothing to get wrong in form.
+- As each paragraph is completed, it gets its own short run on the light model (Haiku), reading exactly the passages the answering model read for the pages that paragraph tags. For each claim it returns the words that end the claim and, per supporting page, the exact words that state it. It may use another passage when the tag was wrong.
+- Paragraphs are independent, so their runs go in parallel, at most 3 at a time across the server, with backoff when the provider throttles. A chain of runs continuing one conversation was tried first and measured: it held the answer 9 s after it was written, for continuity a citation does not need.
+- Software attaches each citation where its claim ends, replacing the page tag. Citations fill in on screen while the answer is still being written, and the answer is `done` the moment its text ends: the last citations land a few seconds later, and the saved turn takes them.
 
-**Corrections are edits** (`domain/edits.ts`). For a prose reply, the correction run offers one ending, `answer_fixes`. Each edit copies an exact passage of the reply and gives its replacement. Software applies the edits to the reply as written, the screen patches the text in place and briefly highlights the changed citations, and nothing else in the reply changes. A model that writes the whole reply out anyway is shown as a revision.
+**Checked by lookup** (`domain/quotes.ts`), never sent back: the lookup ignores case, whitespace, curly quotes, dashes and markdown, and lets "..." stand for words left out.
+- **Repaired in software** (`repairCitations`): words without quote marks become a quote if they are on the page, or a plain marker if not; a citation repeated back to back is written once.
+- **Marked unverified** (`markUnverified`): a quote that isn't in the passage, or one that doesn't state the price, percentage or version of the sentence it supports. Citations side by side support their sentence together.
+- A claim no passage supports keeps its bare page tag.
 
 **Verdicts.** In a changes answer:
 - "changed" needs the vendor's own page, a live read, or a source dated after the original;
@@ -130,7 +135,9 @@ Actual time is spent on the model writing. Perceived time is designed:
 - `start` arrives in under 0.1 s, with a skeleton in place of the answer;
 - search lanes appear as the model types each query (streamed tool input);
 - what the model writes before a search shows as working notes, which fold away when the answer lands;
-- the answer is final when its text ends: the index card is written afterwards, by its own run, so nobody waits for metadata;
+- the answer is final when its text ends: citations land behind it and the index card is written afterwards, both on the light model, so nobody waits for either;
+- the model reads passages, not pages, which shortens its start;
+- planning every search up front with the light model (`services/planner.ts`, `PLAN_SEARCHES=true`) is built but off: on Bedrock a Haiku plan took 3–5 s, as long as Sonnet's own first round, and slowed answers that needed no search;
 - the search cache shares in-flight requests and reuses results for 10 minutes (2 minutes for live reads);
 - the re-check's page reads run in parallel with a hard 4 s wait.
 

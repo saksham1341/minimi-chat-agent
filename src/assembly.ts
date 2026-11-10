@@ -19,7 +19,9 @@ import type { AgentRuntimePort } from "./ports/runtime.ts";
 import type { SearchProvider } from "./ports/search.ts";
 import { ModelCatalog } from "./services/catalog.ts";
 import { ChatService } from "./services/chat.ts";
+import { Citer } from "./services/citer.ts";
 import { Indexer } from "./services/indexer.ts";
+import { Planner } from "./services/planner.ts";
 import { LedgerService } from "./services/ledger.ts";
 import { RecallService } from "./services/recall.ts";
 import { SearchService } from "./services/web-search.ts";
@@ -33,6 +35,10 @@ export interface Settings {
   tavilyKey?: string;
   searchProvider?: string;
   now?: string;
+  /** The model for light work around answers; default any Haiku offered. */
+  fastModel?: string;
+  /** Plan and run searches before the answer starts (off by default: measured slower on Bedrock). */
+  planSearches?: boolean;
   /** Where agents run: in this process, or their own deployment at `agentRuntimeUrl`. */
   agents: "embedded" | "remote";
   agentRuntimeUrl?: string;
@@ -54,6 +60,8 @@ export function settingsFromEnv(env = process.env): Settings {
     tavilyKey: blank(env.TAVILY_API_KEY),
     searchProvider: blank(env.SEARCH_PROVIDER)?.toLowerCase(),
     now: blank(env.AGENT_NOW),
+    fastModel: blank(env.FAST_MODEL),
+    planSearches: env.PLAN_SEARCHES === "true",
     agents: blank(env.APP_AGENTS) === "remote" ? "remote" : "embedded",
     agentRuntimeUrl: blank(env.AGENT_RUNTIME_URL),
     agentServiceToken: blank(env.AGENT_SERVICE_TOKEN),
@@ -74,11 +82,15 @@ export function assemble(settings: Settings, log: (message: string) => void = co
       ? new RemoteRuntime(settings.agentRuntimeUrl ?? "http://127.0.0.1:3001", settings.agentServiceToken)
       : new EmbeddedRuntime(runtimeFromEnv(env, mcp));
 
-  const catalog = new ModelCatalog(runtime);
+  const catalog = new ModelCatalog(runtime, settings.fastModel);
   const recall = new RecallService(store);
   const ledger = new LedgerService(store);
   const indexer = new Indexer({ runtime, ledger, log });
-  const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, indexer, log });
+  const citer = new Citer({ runtime, log });
+  // Measured on Bedrock: a Haiku plan took 3-5 s, as long as Sonnet's own first round, and slowed
+  // answers that needed no search. Kept for faster light models, off unless asked for.
+  const planner = settings.planSearches ? new Planner({ runtime, log }) : undefined;
+  const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, indexer, citer, planner, log });
 
   return { settings, catalog, search, store, clock, chat, recall };
 }
