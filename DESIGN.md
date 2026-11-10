@@ -67,9 +67,11 @@ Also in the loop:
 
 The rule: **a model writes the metadata, software does the matching.** Matching never calls a model; writing the metadata is one background call per turn, after the answer.
 
-### Indexing, in the background
+### Indexing, in two steps
 
-After `done` is sent, `services/indexer.ts` starts a separate run: no tools, its own fixed instruction, and one way to end, `answer_index`. Its brief is the context a good card needs: this conversation's last few exchanges (so "what about Render?" is indexed as Postgres hosting, not a bare name), what memory matched the question to and how confidently (so a re-check is labelled one), the question with any messages that joined it, the answer with its citations, and the sources. If the run fails, the ledger writes the card software can write on its own (site names and row names), so an exchange is never unfindable. The cost is one model call per turn; the gain is that nobody waits for metadata, and the card is written with more context than the answering model had. The card (`domain/card.ts`) holds:
+The answering model marks its main subjects inline, the first time each appears: `[[Neon]]`, `[[managed Postgres hosting]]` (`domain/annotations.ts`). The screen shows them as plain words, and they never count inside code. When the answer is done, the ledger saves a default card at once from those marks, a table's row names and the sites cited, so the exchange is findable by topic from the moment it is answered.
+
+Then, after `done` is sent, `services/indexer.ts` starts a separate run: no tools, its own fixed instruction, and one way to end, `answer_index`. Its brief is the context a good card needs: this conversation's last few exchanges (so "what about Render?" is indexed as Postgres hosting, not a bare name), what memory matched the question to and how confidently (so a re-check is labelled one), the question with any messages that joined it, the answer with its citations, and the sources. Its card replaces the default one, keeping the marked topics as extra ways in; if the run fails, the default card stays. The cost is one model call per turn; the gain is that nobody waits for metadata, and the card is written with more context than the answering model had. The card (`domain/card.ts`) holds:
 - the kind of exchange (new, re-check, follow-up, chat) and a one-line summary;
 - the entities and topics, each with aliases, including generic category words ("Postgres hosting" is also "db hosts", "managed database");
 - for prose answers, the facts stated, each with its subject, value, source and quote (a comparison's or report's facts are its own cells).

@@ -9,8 +9,9 @@
  * message to (so a re-check is labelled one), the question with anything said while it worked,
  * the answer with its citations, and the pages behind them.
  *
- * It costs one model call per turn. If it fails, the ledger writes the card software can write on
- * its own, so an exchange is never unfindable.
+ * It costs one model call per turn. Until it lands, and if it fails, the exchange has the default
+ * card the ledger saved when the answer was done: the topics the answer marked inline, its table
+ * rows and its sites. So an exchange is findable by topic from the moment it is answered.
  */
 import { randomUUID } from "node:crypto";
 import { asked } from "../agents/conversation.ts";
@@ -43,7 +44,7 @@ export class Indexer {
     private readonly deps: { runtime: AgentRuntimePort; ledger: LedgerService; log: (message: string) => void },
   ) {}
 
-  /** Writes the turn's card. Never throws: a failed run leaves software's card. */
+  /** Writes the turn's card, replacing the default one. Never throws: a failed run leaves the default card. */
   async index(turn: TurnRecord, context: IndexContext): Promise<void> {
     const { runtime, ledger, log } = this.deps;
     const started = Date.now();
@@ -69,8 +70,10 @@ export class Indexer {
     } catch (error) {
       log(`index: failed (${(error as Error).message}); software's card instead`);
     }
-    const written = ledger.record(turn, card);
-    log(`index ${turn.id.slice(0, 8)}: ${card ? "card" : "fallback card"}, ${written.kind}, ${written.terms.length} terms, ${written.facts.length} facts, ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    const took = `${((Date.now() - started) / 1000).toFixed(1)}s`;
+    if (!card) return log(`index ${turn.id.slice(0, 8)}: no card, the default card stays (${took})`);
+    const written = ledger.refine(turn, card);
+    log(`index ${turn.id.slice(0, 8)}: ${written.kind}, ${written.terms.length} terms, ${written.facts.length} facts, ${took}`);
   }
 }
 

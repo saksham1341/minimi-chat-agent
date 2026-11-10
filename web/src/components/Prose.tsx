@@ -19,7 +19,7 @@ interface Quote {
  * screen never shows half a quote.
  */
 const linkCitations = (text: string, quotes: Quote[]) =>
-  text
+  plainTopics(text)
     .replace(/\[S\d[0-9a-f]*[^\]\n]*$/, "")
     .replace(MARKER, (_m, id: string, bang: string, quote: string | undefined, rest: string) => {
       const i = quotes.push(quote === undefined ? {} : { quote: quote.replace(/\\(.)/g, "$1"), verified: bang !== "!" }) - 1;
@@ -28,6 +28,17 @@ const linkCitations = (text: string, quotes: Quote[]) =>
     })
     // Anything else that names a source in brackets still reads as a citation, never as raw text.
     .replace(/\[(S\d[0-9a-f]*)\b[^\]\n]*\](?!\()/g, (_m, id: string) => `[${id}](#cite-${id})`);
+
+/**
+ * The answer marks its main topics as `[[Neon]]`, for its index card (`domain/annotations.ts`).
+ * They are for memory, not the reader: shown as plain words, and a mark still being typed at the
+ * end of a streaming answer is hidden. Code keeps its brackets.
+ */
+export function plainTopics(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```|`[^`\n]*`|\[\[([^[\]\n]{1,80})\]\]/g, (m, topic?: string) => topic ?? m)
+    .replace(/\[\[[^\]\n]*\]?$/, "");
+}
 
 export function Prose({ text, sources, className, fixed }: { text: string; sources: Source[]; className?: string; fixed?: string[] }) {
   const quotes: Quote[] = [];

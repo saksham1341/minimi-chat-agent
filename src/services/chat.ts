@@ -314,12 +314,12 @@ export class ChatService {
           `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (re-checked quotes)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
             `${book.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
         );
-        // The index card is written by its own run, in the background, with the context it needs:
-        // the person already has the answer. Without an indexer, software's card.
+        // A default card now, from the topics the answer marked; the indexer's run replaces it in
+        // the background, with the context a full card needs. The person already has the answer.
         const earlier = store.turns(conversation.id).filter((t) => t.id !== turn.id);
         const matched = memory.activity.flatMap((a) => (a.kind === "memory" ? a.exchanges : []));
+        ledger.record(turn);
         if (indexer) void indexer.index(turn, { earlier, matched, confidence: memory.confidence, timeZone: input.timeZone });
-        else ledger.record(turn);
         return;
       }
     } catch (error) {

@@ -6,7 +6,7 @@
 import type { ViewTurn } from "../view.ts";
 import { Artifact } from "./Artifacts.tsx";
 import { phases } from "./Canvas.tsx";
-import { Prose } from "./Prose.tsx";
+import { plainTopics, Prose } from "./Prose.tsx";
 
 const SHAPE_NAME: Record<string, string> = { comparison: "Comparison", changes: "What changed", choices: "Question" };
 
@@ -50,7 +50,7 @@ export function Turn(props: {
           (canvas && turn.shape !== "choices" ? (
             <button className={`canvas-ref${focused ? " is-focused" : ""}`} onClick={onFocus}>
               <span className="canvas-ref-kind">{SHAPE_NAME[turn.shape] ?? "Answer"}</span>
-              <span className="canvas-ref-title">{(turn.answer as { title?: string }).title ?? ""}</span>
+              <span className="canvas-ref-title">{plainTopics((turn.answer as { title?: string }).title ?? "")}</span>
               <span className="canvas-ref-action">{focused ? "In the canvas" : "Open"}</span>
             </button>
           ) : (
@@ -116,7 +116,7 @@ function Working({ turn }: { turn: ViewTurn }) {
     <div className={`working${folded ? " is-folded" : ""}`} aria-hidden={folded}>
       <div className="working-inner">
         {turn.notes.map((n, i) => (
-          <p key={i} className="working-note">{n}</p>
+          <p key={i} className="working-note">{plainTopics(n)}</p>
         ))}
         {thinking && <p className="working-thinking">{thinking.length > 400 ? `…${thinking.slice(-400)}` : thinking}</p>}
       </div>

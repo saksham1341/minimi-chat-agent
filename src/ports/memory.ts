@@ -26,7 +26,7 @@ export interface MemoryStore {
   turnCount(before: Date): number;
 
   saveClaims(turn: TurnRecord, claims: ClaimDraft[], origin: Claim["origin"]): void;
-  /** The exchange's index card: its kind, summary, and the terms it can be found by. */
+  /** The exchange's index card: its kind, summary, and the terms it can be found by. Replaces any card it had. */
   saveCard(turn: TurnRecord, card: ExchangeCard): void;
   cardsFor(turnIds: string[]): Map<string, { kind: string; summary: string }>;
   /** Exchanges before `before` carrying any of these terms, with the ones each carries. */

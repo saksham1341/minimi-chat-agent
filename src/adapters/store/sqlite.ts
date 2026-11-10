@@ -122,7 +122,9 @@ export class SqliteMemory implements MemoryStore {
   }
 
   saveCard(turn: TurnRecord, card: ExchangeCard) {
+    // A card replaces the one before it: the default card saved at once, then the indexer's.
     this.db.prepare("insert or replace into exchange_cards values (?, ?, ?)").run(turn.id, card.kind, card.summary);
+    this.db.prepare("delete from exchange_terms where turn_id = ?").run(turn.id);
     const insert = this.db.prepare("insert or ignore into exchange_terms values (?, ?)");
     for (const term of card.terms) insert.run(turn.id, term);
   }

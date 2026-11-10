@@ -3,7 +3,16 @@
  * still streaming in, so a table fills row by row instead of appearing at the end.
  */
 import type { Source } from "../api.ts";
-import { Cite, formatDay, Prose } from "./Prose.tsx";
+import { Cite, formatDay, plainTopics, Prose } from "./Prose.tsx";
+
+const plainDeep = (value: unknown): unknown =>
+  typeof value === "string"
+    ? plainTopics(value)
+    : Array.isArray(value)
+      ? value.map(plainDeep)
+      : value && typeof value === "object"
+        ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, plainDeep(v)]))
+        : value;
 
 type Partial<T> = { [K in keyof T]?: T[K] extends (infer U)[] ? Partial<U>[] : T[K] };
 
@@ -11,8 +20,10 @@ interface ComparisonData { title: string; columns: string[]; rows: { name: strin
 interface ChangesData { title: string; since: string; items: { subject: string; status: "changed" | "unchanged" | "corrected" | "new" | "unverified"; before?: string; now?: string; note?: string; sources: Ref[] }[]; summary: string }
 interface ChoicesData { question: string; options: { label: string; reply: string }[] }
 
-export function Artifact(props: { shape: string; answer: unknown; sources: Source[]; live: boolean; onPick: (reply: string) => void; canPick: boolean }) {
-  if (!props.answer || typeof props.answer !== "object") return null;
+export function Artifact(raw: { shape: string; answer: unknown; sources: Source[]; live: boolean; onPick: (reply: string) => void; canPick: boolean }) {
+  if (!raw.answer || typeof raw.answer !== "object") return null;
+  // Every string in a card, topic marks shown as plain words (they are for memory, not the reader).
+  const props = { ...raw, answer: plainDeep(raw.answer) };
   if (props.shape === "comparison") return <ComparisonCard data={props.answer as Partial<ComparisonData>} sources={props.sources} live={props.live} />;
   if (props.shape === "changes") return <ChangesCard data={props.answer as Partial<ChangesData>} sources={props.sources} />;
   if (props.shape === "choices") return <ChoicesCard data={props.answer as Partial<ChoicesData>} onPick={props.onPick} canPick={props.canPick && !props.live} />;

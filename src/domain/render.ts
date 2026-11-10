@@ -1,10 +1,11 @@
 /** A structured answer as plain text, with each row's source ids: what memory shows and later turns replay. */
 import type { z } from "zod";
 import { refId, type Changes, type Choices, type Comparison, type SourceRef } from "./answers.ts";
+import { withoutTopics } from "./annotations.ts";
 import { withoutQuotes } from "./quotes.ts";
 
 export function answerAsText(shape: string, text: string, answer?: unknown): string {
-  return withoutQuotes(render(shape, text, answer));
+  return withoutTopics(withoutQuotes(render(shape, text, answer)));
 }
 
 function render(shape: string, text: string, answer?: unknown): string {

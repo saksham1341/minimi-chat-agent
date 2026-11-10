@@ -12,22 +12,48 @@ import type { z } from "zod";
 import { refId, type Changes, type Comparison, type SourceRef } from "../domain/answers.ts";
 import { fallbackCard, toCard, type IndexCard } from "../domain/card.ts";
 import type { ClaimDraft, ExchangeCard, TurnRecord } from "../domain/memory.ts";
-import { normalise } from "../domain/text.ts";
+import { topicsIn } from "../domain/annotations.ts";
+import { matchForm, normalise } from "../domain/text.ts";
 import type { MemoryStore } from "../ports/memory.ts";
 
 export class LedgerService {
   constructor(private readonly store: MemoryStore) {}
 
-  record(turn: TurnRecord, written?: IndexCard): ExchangeCard {
-    const card = written ? toCard(written, turn.sources) : fallbackCard(turn.sources, namesIn(turn));
+  /**
+   * The moment the answer is done: a default card from what software can read off the answer (the
+   * topics the model marked inline, the rows of a table, the sites it drew on), so the exchange can
+   * be found by topic straight away, and a structured answer's facts, which are its own cells.
+   */
+  record(turn: TurnRecord): ExchangeCard {
+    const marked = topicsIn(`${turn.lead}\n${JSON.stringify(turn.answer ?? "")}`);
+    const card = fallbackCard(turn.sources, [...marked, ...namesIn(turn)]);
     this.store.saveCard(turn, card);
-    const facts = this.factsOf(turn, card);
-    const origin = card.kind === "recheck" || turn.shape === "changes" ? "observed" : "stated";
-    if (facts.length) this.store.saveClaims(turn, facts, origin);
+    if (turn.shape !== "reply") {
+      const facts = this.cellFacts(turn);
+      if (facts.length) this.store.saveClaims(turn, facts, turn.shape === "changes" ? "observed" : "stated");
+    }
     return card;
   }
 
-  private factsOf(turn: TurnRecord, card: ExchangeCard): ClaimDraft[] {
+  /**
+   * The indexer's card, when it arrives: it replaces the default one (keeping the marked topics as
+   * extra ways in) and brings a prose answer's facts, with their quotes.
+   */
+  refine(turn: TurnRecord, written: IndexCard): ExchangeCard {
+    const base = toCard(written, turn.sources);
+    const marked = topicsIn(turn.lead).map(matchForm);
+    const card = { ...base, terms: [...new Set([...base.terms, ...marked])] };
+    this.store.saveCard(turn, card);
+    if (turn.shape === "reply" && turn.sources.length) {
+      // A fact keeps its quote only if the quote says its value. An answer from memory alone
+      // (no sources) restates old facts; recording them now would re-date them.
+      const facts = card.facts.map((f) => (f.quote && !says(f.quote, f.value) ? { ...f, quote: undefined } : f));
+      if (facts.length) this.store.saveClaims(turn, facts, card.kind === "recheck" ? "observed" : "stated");
+    }
+    return card;
+  }
+
+  private cellFacts(turn: TurnRecord): ClaimDraft[] {
     const evidence = (refs: SourceRef[], value: string) => {
       // The quote that says this value, if any does; otherwise the first source, unquoted.
       const quoted = refs.find((r): r is Exclude<SourceRef, string> => typeof r !== "string" && !!r.quote && says(r.quote, value));
@@ -45,9 +71,7 @@ export class LedgerService {
       const c = turn.answer as z.infer<typeof Changes>;
       return c.items.filter((i) => i.now).map((i) => ({ subject: i.subject, value: i.now!, ...evidence(i.sources, i.now!) }));
     }
-    // An answer from memory alone restates old facts; recording them now would re-date them.
-    if (!turn.sources.length) return [];
-    return card.facts.map((f) => (f.quote && !says(f.quote, f.value) ? { ...f, quote: undefined } : f));
+    return [];
   }
 }
 

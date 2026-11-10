@@ -8,6 +8,7 @@ import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import { namedDays } from "../src/domain/calendar.ts";
 import { quoteDiff } from "../src/domain/diff.ts";
 import type { ExchangeCard, TurnRecord } from "../src/domain/memory.ts";
+import { topicsIn, withoutTopics } from "../src/domain/annotations.ts";
 import { matchForm, phrases } from "../src/domain/text.ts";
 import { dateIn, isoDay } from "../src/domain/time.ts";
 import { LedgerService } from "../src/services/ledger.ts";
@@ -159,7 +160,7 @@ describe("the ledger", () => {
       shape: "reply", sources: [{ id: "S10000", url: "https://neon.com/pricing", title: "", domain: "neon.com" }], activity: [], model: "fake",
     };
     store.saveTurn(turn);
-    new LedgerService(store).record(turn, {
+    new LedgerService(store).refine(turn, {
       kind: "recheck", summary: "Neon re-check", entities: [{ name: "Neon", aliases: ["neon postgres"] }], topics: [],
       facts: [
         { subject: "Neon, Launch", value: "$15/month", source: "S10000", quote: "Launch $15/month" },
@@ -194,5 +195,32 @@ describe("a busy day", () => {
     expect(ago("2026-11-10T08:28:00Z", TUESDAY)).toBe("2 minutes ago");
     expect(ago("2026-11-09T08:30:00Z", TUESDAY)).toBe("24 hours ago");
     expect(ago("2026-11-03T08:30:00Z", TUESDAY)).toBe("7 days ago");
+  });
+});
+
+describe("topics the answer marks inline", () => {
+  const answer = "[[Neon]] is the cheapest [[managed Postgres hosting]] here; Neon again. ```toml\n[[package]]\n```";
+
+  it("are read once each, never from code", () => {
+    expect(topicsIn(answer)).toEqual(["Neon", "managed Postgres hosting"]);
+    expect(withoutTopics(answer)).toContain("Neon is the cheapest managed Postgres hosting here");
+    expect(withoutTopics(answer)).toContain("[[package]]");
+  });
+
+  it("make the exchange findable by topic the moment it is answered, and the indexer's card replaces them", () => {
+    const store = new SqliteMemory(":memory:");
+    const c = store.createConversation("x", new Date("2026-11-09T09:00:00Z"));
+    const turn: TurnRecord = {
+      id: crypto.randomUUID(), conversationId: c.id, at: "2026-11-09T09:00:00Z", question: "Cheapest?", answerText: withoutTopics(answer), lead: answer,
+      shape: "reply", sources: [], activity: [], model: "fake",
+    };
+    store.saveTurn(turn);
+    const ledger = new LedgerService(store);
+    const later = new Date("2026-11-10T00:00:00Z");
+    ledger.record(turn);
+    expect(store.turnsWithTerms([matchForm("managed postgres hosting")], later, 10).size).toBe(1);
+    ledger.refine(turn, { kind: "new", summary: "s", entities: [{ name: "Neon", aliases: ["db host"] }], topics: [], facts: [] });
+    expect(store.turnsWithTerms([matchForm("db host")], later, 10).size).toBe(1);
+    expect(store.cardsFor([turn.id]).get(turn.id)?.summary).toBe("s");
   });
 });
