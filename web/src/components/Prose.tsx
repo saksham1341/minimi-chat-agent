@@ -78,6 +78,8 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
         aria-label={`Source ${id.slice(1)}: ${source.title}, ${source.domain}`}
         aria-expanded={open}
         onPointerDown={(e) => (pointer.current = e.pointerType)}
+        // Real phones always fire touch events for a finger; pointerType alone has proved unreliable.
+        onTouchStart={() => (pointer.current = "touch")}
         onPointerEnter={(e) => e.pointerType === "mouse" && preview.soon(() => show("hover"))}
         onPointerLeave={(e) => e.pointerType === "mouse" && preview.later()}
         // Keyboard focus previews; focus that comes with a tap or click is handled on click.
@@ -86,7 +88,9 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
         onClick={(e) => {
           // A finger has no hover, so the tap itself previews (as a sheet) and the sheet's
           // button opens the page. Decided by what tapped, not by what the screen claims.
-          if (pointer.current === "touch" || pointer.current === "pen") {
+          const finger = pointer.current === "touch" || pointer.current === "pen" || !matchMedia("(hover: hover)").matches;
+          pointer.current = "mouse";
+          if (finger) {
             e.preventDefault();
             show("sheet");
           }
