@@ -8,8 +8,8 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "start": "vite build --logLevel warn && node --disable-warning=ExperimentalWarning --import tsx src/app/main.ts",
-    "dev": "node --disable-warning=ExperimentalWarning --watch --import tsx src/app/main.ts",
+    "start": "vite build --logLevel warn && node --disable-warning=ExperimentalWarning --import tsx src/main.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch --import tsx src/main.ts",
     "dev:web": "vite",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
