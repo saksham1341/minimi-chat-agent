@@ -67,7 +67,26 @@ export interface Claim {
   sourceUrl?: string;
   /** The source's exact words the fact rested on, as they read that day: the snapshot to compare against later. */
   quote?: string;
+  /**
+   * Stated in an original answer, or observed while re-checking one. A re-check's "before" is only
+   * ever the stated facts, so checking twice never makes the first check the new baseline.
+   */
+  origin: "stated" | "observed";
   observedAt: string; // ISO instant the answer was given
 }
 
 export type ClaimDraft = Pick<Claim, "subject" | "value" | "sourceUrl" | "quote">;
+
+export type ExchangeKind = "new" | "recheck" | "followup" | "chat";
+
+/**
+ * What an exchange was about, written by a model after the answer and used by software to find it
+ * again: its kind, a one-line summary, the terms a person might use for it (entities and topics
+ * with their aliases, in matching form) and the facts it stated.
+ */
+export interface ExchangeCard {
+  kind: ExchangeKind;
+  summary: string;
+  terms: string[];
+  facts: ClaimDraft[];
+}

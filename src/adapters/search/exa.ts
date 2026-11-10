@@ -4,13 +4,27 @@
  * re-read a page live instead of from cache (`maxAgeHours: 0`), which matters for pricing pages:
  * they change in place and rarely carry a date.
  */
-import type { SearchHit, SearchProvider, SearchQuery } from "../../ports/search.ts";
+import type { PageRead, SearchHit, SearchProvider, SearchQuery } from "../../ports/search.ts";
 
 export class ExaSearch implements SearchProvider {
   readonly name = "Exa";
   readonly available = true;
 
   constructor(private readonly apiKey: string) {}
+
+  async read(urls: string[], signal?: AbortSignal): Promise<PageRead[]> {
+    const response = await fetch("https://api.exa.ai/contents", {
+      method: "POST",
+      headers: { "x-api-key": this.apiKey, "content-type": "application/json" },
+      signal,
+      // Live, not from Exa's cache: the point is what the page says now.
+      body: JSON.stringify({ urls, text: { maxCharacters: 20000 }, maxAgeHours: 0, livecrawlTimeout: 8000 }),
+    });
+    if (!response.ok) throw new Error(`Exa answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const body = (await response.json()) as { results?: { url: string; title?: string; text?: string }[] };
+    const byUrl = new Map((body.results ?? []).map((r) => [r.url, r]));
+    return urls.map((url) => ({ url, title: byUrl.get(url)?.title?.trim() || url, text: byUrl.get(url)?.text }));
+  }
 
   async search(q: SearchQuery, signal?: AbortSignal): Promise<SearchHit[]> {
     const response = await fetch("https://api.exa.ai/search", {
@@ -22,7 +36,6 @@ export class ExaSearch implements SearchProvider {
         type: "auto",
         numResults: q.maxResults,
         ...(q.since ? { startPublishedDate: `${q.since}T00:00:00.000Z` } : {}),
-        ...(q.until ? { endPublishedDate: `${q.until}T23:59:59.999Z` } : {}),
         ...(q.domains?.length ? { includeDomains: q.domains } : {}),
         contents: {
           highlights: { query: q.query },

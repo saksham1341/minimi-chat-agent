@@ -9,7 +9,6 @@ import { asked } from "../src/agents/conversation.ts";
 import { runtimeServer } from "../src/agents/api.ts";
 import type { ChatModel } from "../src/agents/ports.ts";
 import { AgentRuntime, type RunEvent, type RunRequest } from "../src/agents/runtime.ts";
-import { AbsentClaimExtractor } from "../src/adapters/claims/runtime.ts";
 import { SystemClock } from "../src/adapters/clock.ts";
 import { RemoteRuntime } from "../src/adapters/runtime/remote.ts";
 import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
@@ -62,9 +61,9 @@ describe("checking a run and continuing it", () => {
       clock: new SystemClock(),
       models: new ModelCatalog(runtime),
       runtime,
-      search: new SearchService({ name: "fake", available: true, search: async () => [] }),
+      search: new SearchService({ name: "fake", available: true, read: async () => [], search: async () => [] }),
       recall: new RecallService(store),
-      ledger: new LedgerService(store, new AbsentClaimExtractor()),
+      ledger: new LedgerService(store),
       log: () => {},
     });
     const events: TurnEvent[] = [];

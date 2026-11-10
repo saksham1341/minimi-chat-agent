@@ -93,9 +93,11 @@ export class SearchService {
     }
   }
 
-  /** Start a search now so a later identical ask is answered from the cache. */
-  warm(input: SearchInput): Promise<SearchResult[]> {
-    return this.search(input).then((r) => r.results);
+  /** Read exact pages now, live, as results with their stable ids. Unreadable pages come back without text. */
+  async read(urls: string[], signal?: AbortSignal): Promise<(SearchResult & { readable: boolean })[]> {
+    const timeout = AbortSignal.timeout(this.timeoutMs);
+    const pages = await this.provider.read(urls, signal ? AbortSignal.any([signal, timeout]) : timeout);
+    return pages.map((p) => ({ id: sourceId(p.url), title: p.title, url: p.url, domain: domainOf(p.url), text: p.text ?? "", readable: !!p.text }));
   }
 }
 

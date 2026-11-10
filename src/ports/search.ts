@@ -4,7 +4,6 @@ export interface SearchQuery {
   query: string;
   /** Only pages published on or after this day (YYYY-MM-DD). */
   since?: string;
-  until?: string;
   domains?: string[];
   maxResults: number;
   /** Re-read pages now instead of from the provider's cache (current prices, status pages). */
@@ -23,4 +22,13 @@ export interface SearchProvider {
   /** False for the absent adapter, so the UI can say search is off rather than fail later. */
   readonly available: boolean;
   search(query: SearchQuery, signal?: AbortSignal): Promise<SearchHit[]>;
+  /** Read these exact pages now, live: for checking whether what a page said still stands. */
+  read(urls: string[], signal?: AbortSignal): Promise<PageRead[]>;
+}
+
+export interface PageRead {
+  url: string;
+  title: string;
+  /** The page's text, or undefined when it could not be read. */
+  text?: string;
 }

@@ -1,11 +1,24 @@
 /** Tavily, the second adapter: same port, a different vendor, for whoever has that key instead. */
-import type { SearchHit, SearchProvider, SearchQuery } from "../../ports/search.ts";
+import type { PageRead, SearchHit, SearchProvider, SearchQuery } from "../../ports/search.ts";
 
 export class TavilySearch implements SearchProvider {
   readonly name = "Tavily";
   readonly available = true;
 
   constructor(private readonly apiKey: string) {}
+
+  async read(urls: string[], signal?: AbortSignal): Promise<PageRead[]> {
+    const response = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      signal,
+      body: JSON.stringify({ urls }),
+    });
+    if (!response.ok) throw new Error(`Tavily answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const body = (await response.json()) as { results?: { url: string; raw_content?: string }[] };
+    const byUrl = new Map((body.results ?? []).map((r) => [r.url, r]));
+    return urls.map((url) => ({ url, title: url, text: byUrl.get(url)?.raw_content?.slice(0, 20000) }));
+  }
 
   async search(q: SearchQuery, signal?: AbortSignal): Promise<SearchHit[]> {
     const response = await fetch("https://api.tavily.com/search", {
@@ -19,7 +32,6 @@ export class TavilySearch implements SearchProvider {
         max_results: q.maxResults,
         include_published_date: true,
         ...(q.since ? { start_date: q.since } : {}),
-        ...(q.until ? { end_date: q.until } : {}),
         ...(q.domains?.length ? { include_domains: q.domains } : {}),
       }),
     });

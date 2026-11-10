@@ -1,5 +1,5 @@
 import type { Entry } from "../agents/conversation.ts";
-import type { Claim, ClaimDraft, Conversation, TurnRecord } from "../domain/memory.ts";
+import type { Claim, ClaimDraft, Conversation, ExchangeCard, TurnRecord } from "../domain/memory.ts";
 
 /** Where conversations, their transcripts, turns and claims live. */
 export interface MemoryStore {
@@ -22,7 +22,15 @@ export interface MemoryStore {
   documentFrequency(term: string, before: Date): number;
   turnCount(before: Date): number;
 
-  saveClaims(turn: TurnRecord, claims: ClaimDraft[]): void;
+  saveClaims(turn: TurnRecord, claims: ClaimDraft[], origin: Claim["origin"]): void;
+  /** The exchange's index card: its kind, summary, and the terms it can be found by. */
+  saveCard(turn: TurnRecord, card: ExchangeCard): void;
+  cardsFor(turnIds: string[]): Map<string, { kind: string; summary: string }>;
+  /** Exchanges before `before` carrying any of these terms, with the ones each carries. */
+  turnsWithTerms(terms: string[], before: Date, limit: number): Map<string, string[]>;
+  /** How many exchanges before `before` carry each term: how much a match on it says. */
+  termFrequency(terms: string[], before: Date): Map<string, number>;
+  turnsByIds(ids: string[]): TurnRecord[];
   /** The exact text each source showed the model for this turn: the evidence as it stood that day. */
   saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>): void;
   /** Every snapshot kept in a conversation, by source id (later turns win). */

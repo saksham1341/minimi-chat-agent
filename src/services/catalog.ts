@@ -20,10 +20,4 @@ export class ModelCatalog {
     if (!model) throw new Error("No model is configured. Set ANTHROPIC_API_KEY or AWS Bedrock credentials in .env.");
     return model;
   }
-
-  /** The lightest model on offer, for background work like claim extraction. */
-  async light(): Promise<string | undefined> {
-    const { models, defaultModel } = await this.list();
-    return (models.find((m) => /haiku/i.test(m.id)) ?? models.find((m) => m.id === defaultModel))?.id;
-  }
 }

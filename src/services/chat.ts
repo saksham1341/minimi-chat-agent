@@ -19,17 +19,17 @@ import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, type OutputShape } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
 import { answerShapes, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
+import { IndexCard, ShapeIndex } from "../domain/card.ts";
 import { bareCitations, citationsIn, describeProblems, malformedCitations, markUnverified, quoteFound, quoteProblems } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
-import { planReadAhead } from "../domain/recheck.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { MemoryStore } from "../ports/memory.ts";
 import type { AgentRuntimePort } from "../ports/runtime.ts";
 import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
 import type { LedgerService } from "./ledger.ts";
-import { readAhead } from "./read-ahead.ts";
+import { recheck } from "./recheck.ts";
 import type { RecallService } from "./recall.ts";
 import { SourceBook } from "./sources.ts";
 import { SEARCH_TOOL, type SearchInput, type SearchResult, type SearchService } from "./web-search.ts";
@@ -113,8 +113,10 @@ export class ChatService {
     const book = new SourceBook({ sources: store.turns(conversation.id).flatMap((t) => t.sources), snapshots: store.snapshotsFor(conversation.id) });
     if (book.sources.length) out.push({ type: "sources", sources: [...book.sources] });
 
-    // Searches a re-check would need start now, in the background; the model is told which.
-    const prepared = readAhead(search, planReadAhead(memory.readAhead), upsert);
+    // When the message most likely points at an earlier answer, re-read the pages its facts came
+    // from and diff its quotes, before the model starts (a few seconds at most).
+    const prepared = memory.confidence === "high" || memory.confidence === "medium" ? await recheck(memory.baseline, search, book, upsert, input.signal) : "";
+    if (book.sources.length) out.push({ type: "sources", sources: [...book.sources] });
     const runId = randomUUID();
     const searches = new Map<string, SearchInput>();
 
@@ -169,6 +171,8 @@ export class ChatService {
               // The query as the model writes it: a lane on screen before the search is even sent.
               const q = (d.partial as { query?: string } | null)?.query;
               if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
+            } else if (d.name === INDEX_TOOL) {
+              // The index card follows the answer and is not shown: the prose stays the answer.
             } else if (d.type === "tool_start") {
               // Whatever was said before a tool call is a note on the way, not the answer.
               spoke = "";
@@ -201,8 +205,11 @@ export class ChatService {
           continue;
         }
 
-        const answer = ended.shape === "reply" ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
-        const turn = record(ended.shape, ended.text, answer);
+        // A prose answer ends with its index card; a structured one carries the card inside it.
+        const prose = ended.shape === "reply" || ended.shape === "index";
+        const written = cardOf(prose ? ended.answer : (ended.answer as { index?: unknown } | undefined)?.index);
+        const answer = prose ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
+        const turn = record(prose ? "reply" : ended.shape, ended.text, answer);
         store.append(conversation.id, [ask, ...fresh]);
         store.saveTurn(turn);
         store.saveSnapshots(turn, book.snapshots);
@@ -210,13 +217,11 @@ export class ChatService {
         out.push({ type: "done", turn, cutShort: ended.cutShort });
         const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
         log(
-          `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (read ahead)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
+          `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (re-checked quotes)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
             `${book.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
         );
-        ledger.record(turn).then(
-          (n) => n && log(`ledger: ${n} claim${n === 1 ? "" : "s"} recorded for turn ${turn.id}`),
-          (error) => log(`ledger: ${(error as Error).message}`),
-        );
+        const card = ledger.record(turn, written);
+        log(`ledger: ${written ? "card" : "fallback card"}, ${card.kind}, ${card.terms.length} terms, ${card.facts.length} facts`);
         return;
       }
     } catch (error) {
@@ -266,17 +271,33 @@ export class ChatService {
    * the fact, a malformed one or an unknown source always; quote misses only beyond two).
    */
   private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[], book: SourceBook): string | null {
-    if (ended.shape !== "reply") {
+    // The index card is metadata: a bad one falls back to software's card, never costs a rewrite.
+    if (ended.shape !== "reply" && ended.shape !== "index") {
       const shape = shapes.find((s) => s.name === ended.shape);
       const result = shape?.parse?.(ended.answer);
       return result && !result.ok ? `Your answer_${ended.shape} call did not hold up: ${result.error}` : null;
     }
+    // The mechanism is not the person's business: "the context shows…" goes back to be said plainly.
+    const leak = MECHANISM.find((m) => ended.text.toLowerCase().includes(m));
+    if (leak) return `Your reply mentions "${leak}". Speak as someone who remembers (or does not), never about context, memory or calendars as a mechanism. Give the whole answer again.`;
     const misses = quoteProblems(citationsIn(ended.text), book.snapshots);
     const structural = [...misses.filter((p) => p.reason === "unknown source"), ...malformedCitations(ended.text), ...bareCitations(ended.text)];
     const quoteMisses = misses.filter((p) => p.reason !== "unknown source");
     const problems = structural.length || quoteMisses.length > 2 ? [...structural, ...quoteMisses] : [];
     return problems.length ? describeProblems(problems) : null;
   }
+}
+
+const INDEX_TOOL = `${ENDING_PREFIX}index`;
+/** Words that only describe how the agent works, never what it knows. */
+const MECHANISM = ["the context", "my context", "context block", "context i have", "my memory shows", "memory shows", "the calendar shows", "according to my memory", "<context", "<rechecked"];
+
+/** The model's index card, if it wrote a valid one (a prose answer's, or a structured answer's without facts). */
+function cardOf(value: unknown): IndexCard | undefined {
+  const full = IndexCard.safeParse(value);
+  if (full.success) return full.data;
+  const light = ShapeIndex.safeParse(value);
+  return light.success ? { ...light.data, facts: [] } : undefined;
 }
 
 /** The shape's own reading of its arguments (defaults filled, unknown fields dropped), if it has one. */

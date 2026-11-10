@@ -7,7 +7,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Entry } from "../../agents/conversation.ts";
-import type { Claim, ClaimDraft, Conversation, TurnRecord } from "../../domain/memory.ts";
+import type { Claim, ClaimDraft, Conversation, ExchangeCard, TurnRecord } from "../../domain/memory.ts";
 import type { MemoryStore } from "../../ports/memory.ts";
 
 const SCHEMA = `
@@ -31,6 +31,13 @@ create table if not exists claims (
   value text not null, source_url text, observed_at text not null
 );
 create index if not exists claims_turn on claims(turn_id);
+create table if not exists exchange_cards (
+  turn_id text primary key, kind text not null, summary text not null
+);
+create table if not exists exchange_terms (
+  turn_id text not null, term text not null, primary key (turn_id, term)
+);
+create index if not exists exchange_terms_term on exchange_terms(term);
 create table if not exists snapshots (
   turn_id text not null, source_id text not null, url text not null, text text not null, seen_at text not null,
   primary key (turn_id, source_id)
@@ -50,6 +57,7 @@ export class SqliteMemory implements MemoryStore {
     // Added after the first release: an existing memory file gains the column in place.
     const columns = (this.db.prepare("pragma table_info(claims)").all() as Row[]).map((c) => c.name);
     if (!columns.includes("quote")) this.db.exec("alter table claims add column quote text");
+    if (!columns.includes("origin")) this.db.exec("alter table claims add column origin text not null default 'stated'");
   }
 
   createConversation(title: string, at: Date): Conversation {
@@ -134,11 +142,52 @@ export class SqliteMemory implements MemoryStore {
     return (this.db.prepare("select count(*) as n from turns where at <= ?").get(before.toISOString()) as Row).n as number;
   }
 
-  saveClaims(turn: TurnRecord, claims: ClaimDraft[]) {
+  saveClaims(turn: TurnRecord, claims: ClaimDraft[], origin: Claim["origin"]) {
     const insert = this.db.prepare(
-      "insert into claims (id, turn_id, conversation_id, subject, value, source_url, observed_at, quote) values (?, ?, ?, ?, ?, ?, ?, ?)",
+      "insert into claims (id, turn_id, conversation_id, subject, value, source_url, observed_at, quote, origin) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
-    for (const c of claims) insert.run(randomUUID(), turn.id, turn.conversationId, c.subject, c.value, c.sourceUrl ?? null, turn.at, c.quote ?? null);
+    for (const c of claims) insert.run(randomUUID(), turn.id, turn.conversationId, c.subject, c.value, c.sourceUrl ?? null, turn.at, c.quote ?? null, origin);
+  }
+
+  saveCard(turn: TurnRecord, card: ExchangeCard) {
+    this.db.prepare("insert or replace into exchange_cards values (?, ?, ?)").run(turn.id, card.kind, card.summary);
+    const insert = this.db.prepare("insert or ignore into exchange_terms values (?, ?)");
+    for (const term of card.terms) insert.run(turn.id, term);
+  }
+
+  cardsFor(turnIds: string[]): Map<string, { kind: string; summary: string }> {
+    if (!turnIds.length) return new Map();
+    const rows = this.db.prepare(`select * from exchange_cards where turn_id in (${turnIds.map(() => "?").join(",")})`).all(...turnIds) as Row[];
+    return new Map(rows.map((r) => [r.turn_id as string, { kind: r.kind as string, summary: r.summary as string }]));
+  }
+
+  turnsWithTerms(terms: string[], before: Date, limit: number): Map<string, string[]> {
+    if (!terms.length) return new Map();
+    const rows = this.db
+      .prepare(
+        `select exchange_terms.turn_id as id, exchange_terms.term as term from exchange_terms join turns on turns.id = exchange_terms.turn_id
+         where exchange_terms.term in (${terms.map(() => "?").join(",")}) and turns.at <= ? order by turns.at desc limit ?`,
+      )
+      .all(...terms, before.toISOString(), limit) as Row[];
+    const out = new Map<string, string[]>();
+    for (const r of rows) out.set(r.id as string, [...(out.get(r.id as string) ?? []), r.term as string]);
+    return out;
+  }
+
+  termFrequency(terms: string[], before: Date): Map<string, number> {
+    if (!terms.length) return new Map();
+    const rows = this.db
+      .prepare(
+        `select exchange_terms.term as term, count(*) as n from exchange_terms join turns on turns.id = exchange_terms.turn_id
+         where exchange_terms.term in (${terms.map(() => "?").join(",")}) and turns.at <= ? group by exchange_terms.term`,
+      )
+      .all(...terms, before.toISOString()) as Row[];
+    return new Map(rows.map((r) => [r.term as string, r.n as number]));
+  }
+
+  turnsByIds(ids: string[]): TurnRecord[] {
+    if (!ids.length) return [];
+    return (this.db.prepare(`select * from turns where id in (${ids.map(() => "?").join(",")})`).all(...ids) as Row[]).map(toTurn);
   }
 
   saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>) {
@@ -169,6 +218,7 @@ export class SqliteMemory implements MemoryStore {
       value: r.value as string,
       sourceUrl: (r.source_url as string | null) ?? undefined,
       quote: (r.quote as string | null) ?? undefined,
+      origin: (r.origin as Claim["origin"]) ?? "stated",
       observedAt: r.observed_at as string,
     }));
   }

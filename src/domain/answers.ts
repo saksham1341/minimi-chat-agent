@@ -12,8 +12,8 @@
 import { z } from "zod";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
-import { isVendorSite } from "./recheck.ts";
-import { describeProblems, quoteProblems, type QuoteProblem } from "./quotes.ts";
+import { IndexCard, ShapeIndex } from "./card.ts";
+import { isVendorSite } from "./vendor.ts";
 
 const sourceIds = z
   .array(
@@ -44,7 +44,8 @@ export const Comparison = z.object({
       }),
     )
     .min(2),
-  takeaway: z.string().describe("Two or three sentences of markdown: which fits whom, and why. Cite as [S#]."),
+  takeaway: z.string().describe("Two or three sentences of markdown: which fits whom, and why, with citations."),
+  index: ShapeIndex.describe("This exchange's index card, written last. Not shown to the person: it is how you will find this exchange again."),
 });
 
 export const Changes = z.object({
@@ -73,7 +74,8 @@ export const Changes = z.object({
       }),
     )
     .min(1),
-  summary: z.string().describe("One or two sentences of markdown: the bottom line. Cite as [S#]."),
+  summary: z.string().describe("One or two sentences of markdown: the bottom line, with citations."),
+  index: ShapeIndex.describe("This exchange's index card, written last. Not shown to the person: it is how you will find this exchange again."),
 });
 
 export const Choices = z.object({
@@ -119,7 +121,7 @@ export function showsNow(subject: string, source: Source, since: string): boolea
   return source.published ? source.published >= since : !!source.live || isVendorSite(subject, source.domain);
 }
 
-export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Source[]): string | null {
+export function evidenceProblem(changes: Pick<z.infer<typeof Changes>, "since" | "items">, sources: Source[]): string | null {
   const describe = (s: Source) =>
     `${s.id} (${s.domain}, ${s.published ? `published ${s.published}` : "undated, not read live, not the vendor's own site"})`;
   const problems: string[] = [];
@@ -137,12 +139,6 @@ export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Sourc
   return problems.length
     ? `${problems.join("; ")}. Overturning what was said needs the vendor's own current page or a source published on or after ${changes.since}. Re-check, or mark it unchanged or unverified, then call answer_changes again.`
     : null;
-}
-
-/** Quotes in a card's source entries that are not in their snapshots. */
-export function cardQuoteProblems(answer: unknown, snapshots: ReadonlyMap<string, string>): QuoteProblem[] {
-  const refs = collectRefs(answer).filter((r): r is Exclude<SourceRef, string> => typeof r !== "string");
-  return quoteProblems(refs.map((r) => ({ id: r.id, quote: r.quote })), snapshots);
 }
 
 /** Every source entry in a card, wherever it sits. */
@@ -172,6 +168,13 @@ export function answerShapes(sources: () => Source[] = () => []): OutputShape[] 
         "answer, one item per option with all its facts (not one item per attribute); leave `note` empty when nothing changed; " +
         "mark 'unverified' honestly when the search could not confirm it either way.",
       ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources())) as Check,
+    ),
+    shape(
+      "index",
+      IndexCard,
+      "After a prose answer, in the same message, call this once with the exchange's index card. It is not shown to " +
+        "the person: it is how you will find this exchange again in a later conversation. Not used after the answer " +
+        "shapes, which carry their card in their own `index` field.",
     ),
     shape(
       "choices",

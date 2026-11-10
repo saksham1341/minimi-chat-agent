@@ -8,7 +8,6 @@
  * deployment (`APP_AGENTS=remote`, `npm run agents`). The application never holds a model key.
  */
 import { runtimeFromEnv } from "./agents/config.ts";
-import { RuntimeClaimExtractor } from "./adapters/claims/runtime.ts";
 import { ShiftedClock, SystemClock } from "./adapters/clock.ts";
 import { EmbeddedRuntime } from "./adapters/runtime/embedded.ts";
 import { RemoteRuntime } from "./adapters/runtime/remote.ts";
@@ -76,8 +75,7 @@ export function assemble(settings: Settings, log: (message: string) => void = co
 
   const catalog = new ModelCatalog(runtime);
   const recall = new RecallService(store);
-  const extractor = new RuntimeClaimExtractor(runtime, () => catalog.light());
-  const ledger = new LedgerService(store, extractor);
+  const ledger = new LedgerService(store);
   const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, log });
 
   return { settings, catalog, search, store, clock, chat, recall };
