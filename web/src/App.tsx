@@ -22,7 +22,11 @@ export function App() {
   const [turns, setTurns] = useState<ViewTurn[]>([]);
   const [modelId, setModelId] = useState<string | null>(localStorage.getItem(MODEL_KEY));
   const [drawer, setDrawer] = useState(false);
-  const wide = useMedia("(min-width: 1180px)");
+  // The canvas sits beside the chat from 900px up (the conversation list folds into the drawer
+  // below 1180px); on phones it is a full-screen sheet opened from the top bar.
+  const wide = useMedia("(min-width: 900px)");
+  const roomy = useMedia("(min-width: 1180px)");
+  const [sheet, setSheet] = useState(false);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [canvasOpen, setCanvasOpen] = useState(true);
   const controller = useRef<AbortController | null>(null);
@@ -109,10 +113,16 @@ export function App() {
   const hasWork = (t: ViewTurn) => t.activity.some((a) => a.kind === "search" || a.kind === "recall") || t.shape !== "reply";
   const canvasTurn = turns.find((t) => t.id === focusId && hasWork(t)) ?? [...turns].reverse().find(hasWork);
   const showCanvas = wide && canvasOpen && !!canvasTurn;
+  const showSheet = !wide && sheet && !!canvasTurn;
+  const openCanvas = (id?: string) => {
+    if (id) setFocusId(id);
+    if (wide) setCanvasOpen(true);
+    else setSheet(true);
+  };
   const labelOf = (id?: string) => meta?.models.find((m) => m.id === id)?.label;
 
   return (
-    <div className={`shell${drawer ? " drawer-open" : ""}${showCanvas ? " has-canvas" : ""}`}>
+    <div className={`shell${drawer ? " drawer-open" : ""}${showCanvas ? " has-canvas" : ""}${showCanvas && !roomy ? " folded" : ""}`}>
       <Sidebar conversations={conversations} currentId={conversationId} today={today} recalled={recalled} onOpen={open} onNew={startNew} />
       <button className="scrim" aria-label="Close conversations" onClick={() => setDrawer(false)} tabIndex={drawer ? 0 : -1} />
       <main className="main">
@@ -121,6 +131,12 @@ export function App() {
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
           </button>
           <h1 className="topbar-title">{current?.title ?? (turns.length ? turns[0].question : "New conversation")}</h1>
+          {canvasTurn && !showCanvas && (
+            <button className={`work-button${canvasTurn.status === "streaming" ? " is-live" : ""}`} onClick={() => openCanvas()}>
+              <span className="work-dot" aria-hidden />
+              Work
+            </button>
+          )}
           <Clock now={now} />
         </header>
 
@@ -143,10 +159,7 @@ export function App() {
                   modelLabel={labelOf(t.model)}
                   canvas={showCanvas}
                   focused={showCanvas && canvasTurn?.id === t.id}
-                  onFocus={() => {
-                    setFocusId(t.id);
-                    setCanvasOpen(true);
-                  }}
+                  onFocus={() => openCanvas(t.id)}
                 />
               ))}
             </div>
@@ -159,8 +172,17 @@ export function App() {
           <Composer meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
         </div>
       </main>
-      {showCanvas && canvasTurn && (
-        <Canvas turn={canvasTurn} onPick={send} canPick={canvasTurn.id === turns.at(-1)?.id} onClose={() => setCanvasOpen(false)} />
+      {(showCanvas || showSheet) && canvasTurn && (
+        <Canvas
+          turn={canvasTurn}
+          sheet={showSheet}
+          onPick={(reply) => {
+            setSheet(false);
+            send(reply);
+          }}
+          canPick={canvasTurn.id === turns.at(-1)?.id}
+          onClose={() => (showSheet ? setSheet(false) : setCanvasOpen(false))}
+        />
       )}
     </div>
   );

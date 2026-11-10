@@ -46,13 +46,14 @@ button:disabled { cursor: default; }
 
 /* ---- shell ----------------------------------------------------------------------------- */
 
-.shell { display: grid; grid-template-columns: var(--sidebar) 1fr; height: 100%; }
-.main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; height: 100%; background: var(--paper); border-left: 1px solid var(--rule); }
+.shell { display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); height: 100%; }
+.main { display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); min-width: 0; height: 100%; background: var(--paper); border-left: 1px solid var(--rule); }
 .scrim { display: none; }
 
 .topbar { display: flex; align-items: center; gap: 0.75rem; padding: 0.85rem 1.5rem; border-bottom: 1px solid var(--rule-soft); }
 .topbar-title { flex: 1; min-width: 0; margin: 0; font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .menu { display: none; border: 0; background: none; padding: 0.25rem; color: var(--muted); }
+.work-button, .clock { flex: none; }
 .clock { font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .scroller { overflow-y: auto; overscroll-behavior: contain; }
@@ -170,6 +171,9 @@ button:disabled { cursor: default; }
 .model-mark { margin: 0.9rem 0 0; font-size: 0.75rem; color: var(--faint); }
 
 /* sources list */
+.sources li { min-width: 0; overflow: hidden; }
+.sources-more { margin-top: 0.4rem; padding: 0; border: 0; background: none; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.sources-more:hover { color: var(--ink); }
 .sources { list-style: none; margin: 1.1rem 0 0; padding: 0.8rem 0 0; border-top: 1px solid var(--rule-soft); display: grid; gap: 0.3rem; }
 .sources a { display: flex; align-items: baseline; gap: 0.55rem; min-width: 0; text-decoration: none; color: var(--ink-soft); font-size: 0.85rem; }
 .sources a:hover .source-title { text-decoration: underline; }
@@ -195,7 +199,7 @@ button:disabled { cursor: default; }
 .card-comparison tbody tr:last-child > * { border-bottom: 0; }
 
 .changes { list-style: none; margin: 0; padding: 0; }
-.change { display: grid; grid-template-columns: 7.5rem 1fr; gap: 0.8rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--rule-soft); }
+.change { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 0.8rem; padding: 0.75rem 1rem; border-bottom: 1px solid var(--rule-soft); }
 .change:last-child { border-bottom: 0; }
 .change-status { align-self: start; justify-self: start; padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
 .status-changed .change-status { background: var(--highlighter); color: var(--ink); }
@@ -277,7 +281,7 @@ button:disabled { cursor: default; }
 /* ---- canvas: the work, live ----------------------------------------------------------- */
 
 .shell.has-canvas { grid-template-columns: var(--sidebar) minmax(0, 1fr) minmax(26rem, 44vw); }
-.canvas { display: grid; grid-template-rows: auto 1fr; min-width: 0; height: 100%; background: var(--fog); border-left: 1px solid var(--rule); }
+.canvas { display: grid; grid-template-rows: auto 1fr; grid-template-columns: minmax(0, 1fr); min-width: 0; height: 100%; background: var(--fog); border-left: 1px solid var(--rule); }
 .canvas-head { position: relative; padding: 1rem 1.25rem 0.9rem; border-bottom: 1px solid var(--rule); background: var(--paper); }
 .canvas-question { margin: 0 2rem 0.75rem 0; font-weight: 600; font-size: 0.95rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .canvas-close { position: absolute; top: 0.85rem; right: 0.9rem; display: grid; place-items: center; width: 1.6rem; height: 1.6rem; border: 0; border-radius: 50%; background: none; color: var(--muted); }
@@ -363,10 +367,39 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
 .canvas-ref-title { font-weight: 600; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .canvas-ref-action { font-size: 0.78rem; color: var(--teal); font-weight: 600; }
 
+/* Canvas beside the chat on mid-width screens: the conversation list folds into the drawer. */
+@media (max-width: 1179px) {
+  .shell.has-canvas { grid-template-columns: minmax(0, 1fr) minmax(21rem, 44vw); }
+  .shell.folded .sidebar {
+    position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(var(--sidebar), 85vw); background: var(--fog);
+    transform: translateX(-100%); transition: transform 200ms ease;
+  }
+  .shell.folded.drawer-open .sidebar { transform: none; box-shadow: 8px 0 32px rgba(28, 36, 48, 0.15); }
+  .shell.folded.drawer-open .scrim { display: block; position: fixed; inset: 0; z-index: 35; border: 0; background: rgba(28, 36, 48, 0.25); }
+  .shell.folded .menu { display: block; }
+  .shell.folded .main { border-left: 0; }
+}
+
+/* On phones the canvas is a sheet over everything. */
+.canvas.is-sheet { position: fixed; inset: 0; z-index: 60; border-left: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .canvas.is-sheet { animation: rise 220ms cubic-bezier(.2,.8,.2,1); }
+}
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } }
+
+.work-button {
+  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.65rem; border: 1px solid var(--rule); border-radius: 999px;
+  background: var(--paper); font-size: 0.8rem; font-weight: 600; color: var(--ink-soft);
+}
+.work-button:hover { border-color: var(--ink-soft); color: var(--ink); }
+.work-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.work-button.is-live .work-dot { background: var(--teal); }
+@media (prefers-reduced-motion: no-preference) { .work-button.is-live .work-dot { animation: pulse 1s ease-in-out infinite; } }
+
 /* ---- small screens --------------------------------------------------------------------- */
 
-@media (max-width: 860px) {
-  .shell { grid-template-columns: 1fr; }
+@media (max-width: 899px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
   .sidebar {
     position: fixed; z-index: 40; inset: 0 auto 0 0; width: min(var(--sidebar), 85vw); background: var(--fog);
     transform: translateX(-100%); transition: transform 200ms ease;
@@ -379,9 +412,15 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
   .thread { padding: 1.25rem 1rem 2rem; }
   .dock { padding: 0 0.75rem 0.75rem; }
   .prose { font-size: 1.0625rem; }
-  .change { grid-template-columns: 1fr; gap: 0.35rem; }
+  .change { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
   .question p { max-width: 92%; }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
+}
+
+/* A changes card stacks its status above the item when the card itself is narrow (canvas, tablet). */
+.card-changes { container-type: inline-size; }
+@container (max-width: 34rem) {
+  .change { grid-template-columns: minmax(0, 1fr); gap: 0.35rem; }
 }

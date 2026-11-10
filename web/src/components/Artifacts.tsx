@@ -81,7 +81,7 @@ function ChangesCard({ data, sources }: { data: Partial<ChangesData>; sources: S
               </span>
               {(item.before || item.now) && (
                 <span className="change-values">
-                  {item.before && item.now && item.before !== item.now ? (
+                  {(item.status === "changed" || item.status === "corrected") && item.before && item.now && item.before !== item.now ? (
                     <>
                       <del>{item.before}</del>
                       <span className="change-arrow" aria-label="now">to</span>

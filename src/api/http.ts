@@ -99,7 +99,7 @@ function validZone(zone?: string) {
   }
 }
 
-/** Compressed once per file and kept: the build does not change while the server runs. */
+/** Compressed once per file version (path + modification time), so a rebuild is picked up. */
 const gzipped = new Map<string, Buffer>();
 
 async function file(req: IncomingMessage, res: ServerResponse, root: string, path: string) {
@@ -117,8 +117,9 @@ async function file(req: IncomingMessage, res: ServerResponse, root: string, pat
   const cache = target.includes(`${join(root, "assets")}`) ? "public, max-age=31536000, immutable" : "no-cache";
   const compressible = /^(text|application\/json|image\/svg)/.test(type);
   if (compressible && /\bgzip\b/.test(String(req.headers["accept-encoding"] ?? ""))) {
-    let body = gzipped.get(target);
-    if (!body) gzipped.set(target, (body = gzipSync(content)));
+    const key = `${target}:${(await stat(target)).mtimeMs}`;
+    let body = gzipped.get(key);
+    if (!body) gzipped.set(key, (body = gzipSync(content)));
     res.writeHead(200, { "content-type": type, "content-encoding": "gzip", "content-length": body.length, "cache-control": cache, vary: "accept-encoding" });
     return res.end(body);
   }

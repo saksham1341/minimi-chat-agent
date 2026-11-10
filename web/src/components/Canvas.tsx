@@ -32,7 +32,7 @@ export function phases(turn: ViewTurn): Record<Step, State> {
 
 const STEP_LABEL: Record<Step, string> = { remember: "Remember", search: "Search", read: "Read", write: "Write" };
 
-export function Canvas({ turn, onPick, canPick, onClose }: { turn: ViewTurn; onPick: (reply: string) => void; canPick: boolean; onClose?: () => void }) {
+export function Canvas({ turn, onPick, canPick, onClose, sheet }: { turn: ViewTurn; onPick: (reply: string) => void; canPick: boolean; onClose?: () => void; sheet?: boolean }) {
   const live = turn.status === "streaming";
   const steps = phases(turn);
   const memory = turn.activity.find((a): a is Memory => a.kind === "memory");
@@ -47,7 +47,7 @@ export function Canvas({ turn, onPick, canPick, onClose }: { turn: ViewTurn; onP
   }, [hasArtifact, turn.id]);
 
   return (
-    <aside className={`canvas${live ? " is-live" : ""}`} aria-label="Work for this answer">
+    <aside className={`canvas${live ? " is-live" : ""}${sheet ? " is-sheet" : ""}`} aria-label="Work for this answer" {...(sheet ? { role: "dialog", "aria-modal": true } : {})}>
       <header className="canvas-head">
         <p className="canvas-question">{turn.question}</p>
         {onClose && (
