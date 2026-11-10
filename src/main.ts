@@ -11,8 +11,8 @@ const app = assemble(settingsFromEnv());
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const server = serve(app, join(root, "web/dist"));
 
-server.listen(app.settings.port, app.settings.host, () => {
-  const models = app.catalog.list();
+server.listen(app.settings.port, app.settings.host, async () => {
+  const { models } = await app.catalog.list();
   console.log(`\n  Chat agent on http://localhost:${app.settings.port}`);
   if (app.settings.host === "127.0.0.1") console.log("               (local only; set HOST=0.0.0.0 to open it to your network)");
   if (app.settings.host === "0.0.0.0") {
@@ -26,7 +26,8 @@ server.listen(app.settings.port, app.settings.host, () => {
     }
   }
   console.log("");
-  console.log(`  models   ${models.length ? models.map((m) => m.label).join(", ") : "none — set ANTHROPIC_API_KEY or AWS Bedrock credentials in .env"}`);
+  console.log(`  agents   ${app.settings.agents === "remote" ? `remote runtime at ${app.settings.agentRuntimeUrl ?? "http://127.0.0.1:3001"}` : "embedded runtime"}`);
+  console.log(`  models   ${models.length ? models.map((m) => m.label).join(", ") : "none — set ANTHROPIC_API_KEY or AWS Bedrock credentials in .env (on the runtime, if it runs remote)"}`);
   console.log(`  search   ${app.search.available ? `${app.search.providerName}, served over MCP at /mcp` : "off — set EXA_API_KEY or TAVILY_API_KEY in .env"}`);
   console.log(`  clock    ${app.clock.now().toISOString()}${app.settings.now ? " (AGENT_NOW)" : ""}, ${app.settings.timeZone}`);
   console.log(`  memory   ${app.settings.dataFile}\n`);

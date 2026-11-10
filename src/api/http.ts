@@ -28,7 +28,7 @@ export function serve(app: App, staticDir: string) {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname;
-      if (path === "/api/meta" && req.method === "GET") return json(res, meta(app));
+      if (path === "/api/meta" && req.method === "GET") return json(res, await meta(app));
       if (path === "/api/conversations" && req.method === "GET") return json(res, app.store.conversations(100));
       const one = path.match(/^\/api\/conversations\/([\w-]+)$/);
       if (one && req.method === "GET") {
@@ -48,7 +48,7 @@ export function serve(app: App, staticDir: string) {
         // The tool server is for the runtime, which by default is this same process.
         const from = req.socket.remoteAddress?.replace("::ffff:", "");
         if (!app.settings.mcpAllowRemote && !isLoopback(from) && from !== app.settings.host) return json(res, { error: "forbidden" }, 403);
-        return handleMcp(app.search, req, res);
+        return handleMcp(app.search, app.runs, req, res);
       }
       if (path.startsWith("/api/")) return json(res, { error: "not found" }, 404);
       return file(req, res, staticDir, path);
@@ -59,10 +59,11 @@ export function serve(app: App, staticDir: string) {
   });
 }
 
-function meta(app: App) {
+async function meta(app: App) {
+  const { models, defaultModel } = await app.catalog.list();
   return {
-    models: app.catalog.list(),
-    defaultModel: app.catalog.defaultId ?? null,
+    models,
+    defaultModel,
     search: { provider: app.search.providerName, available: app.search.available },
     now: app.clock.now().toISOString(),
     timeZone: app.settings.timeZone,

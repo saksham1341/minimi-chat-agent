@@ -10,7 +10,7 @@ const SRC = resolve(import.meta.dirname, "../src");
 
 /** layer → layers it may import from (besides itself). */
 const ALLOWED: Record<string, string[]> = {
-  agents: [], // the runtime knows nothing of the app
+  agents: [], // the runtime knows nothing of the application: not one import
   domain: ["agents"], // types and rules; the answer shapes are the runtime's OutputShape
   ports: ["agents", "domain"],
   adapters: ["agents", "domain", "ports"],

@@ -4,16 +4,14 @@
  *   SearchService   the operation: a query in, results out, through the `SearchProvider` port,
  *                   with a short cache and a timeout. It owns the tool's contract (name,
  *                   description, input schema), and the MCP interface (`api/mcp.ts`) serves it
- *   CitedSearch     wraps whatever tool surface the runtime has, for one answer: it numbers the
- *                   results so the answer can cite them ([S1], [S2]...), formats them for the
- *                   model, and reports each search to the screen as it starts and lands
+ *   CitedSearch     one run's view of it: numbers the results so the answer can cite them
+ *                   ([S1], [S2]...), keeps each source's text, and reports each search to the
+ *                   screen. The MCP interface serves it per run (`api/mcp.ts`)
  *
  * Numbering is per answer, so S3 means the same page everywhere in the reply that cites it and
  * nothing outside it. That is why it lives here, per turn, and not in the stateless service.
  */
 import { z } from "zod";
-import type { ToolCall, ToolResult } from "../agents/conversation.ts";
-import type { ToolSpec, ToolSurface } from "../agents/ports.ts";
 import type { Activity, Source } from "../domain/memory.ts";
 import type { SearchHit, SearchProvider, SearchQuery } from "../ports/search.ts";
 
@@ -78,14 +76,9 @@ export class SearchService {
   }
 }
 
-/** How the service hands results across the boundary: plain JSON, so any client can read it. */
-export interface SearchPayload {
-  results: SearchHit[];
-}
-
 export interface CitedSearchOptions {
-  /** Searches already under way for this turn; a matching call is answered from them. */
-  readAhead?: { take(args: Partial<SearchInput>): Promise<ToolResult> | undefined };
+  /** Searches already under way for this turn; a matching search is answered from them. */
+  readAhead?: { take(args: Partial<SearchInput>): Promise<SearchHit[]> | undefined };
   /**
    * Sources and snapshots from earlier turns of the same conversation. Numbering carries on from
    * them, so a follow-up can cite S5 from the last answer and have the quote checked.
@@ -93,7 +86,13 @@ export interface CitedSearchOptions {
   prior?: { sources: Source[]; snapshots: ReadonlyMap<string, string> };
 }
 
-export class CitedSearch implements ToolSurface {
+/**
+ * One run's searches, as the model sees them: numbered so an answer can cite them ([S1], [S2]...),
+ * each source's text kept as a snapshot its quotes are checked against, and each search reported
+ * to the screen as it starts and lands. Lives in the application, behind MCP: the runtime only
+ * ever sees the text this returns.
+ */
+export class CitedSearch {
   /** Every source this conversation knows, earlier turns' first. */
   readonly sources: Source[] = [];
   /** The exact text each source showed the model: what its quotes are checked against. */
@@ -101,10 +100,11 @@ export class CitedSearch implements ToolSurface {
   private readonly byUrl = new Map<string, Source>();
   private readonly foundNow = new Set<string>();
   private next = 1;
+  private calls = 0;
 
   constructor(
-    private readonly inner: ToolSurface,
-    private readonly report: (activity: Activity, sources: Source[]) => void,
+    private readonly search: SearchService,
+    private readonly report: (activity: Activity, sources: Source[]) => void = () => {},
     private readonly options: CitedSearchOptions = {},
   ) {
     for (const source of options.prior?.sources ?? []) {
@@ -122,42 +122,24 @@ export class CitedSearch implements ToolSurface {
     return this.sources.filter((s) => this.foundNow.has(s.id) || cited.has(s.id));
   }
 
-  offered(): ToolSpec[] | Promise<ToolSpec[]> {
-    return this.inner.offered();
-  }
-
-  async run(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
-    if (call.name !== SEARCH_TOOL.name) return this.inner.run(call, signal);
-    const args = call.arguments as Partial<SearchInput>;
+  /** One search, answered as the text the model reads. */
+  async answer(args: SearchInput, signal?: AbortSignal): Promise<{ text: string; failed: boolean }> {
     const activity: Activity = {
-      kind: "search", id: call.id, query: String(args.query ?? ""), since: args.since, domains: args.domains, fresh: args.fresh,
+      kind: "search", id: `search-${++this.calls}`, query: args.query, since: args.since, domains: args.domains, fresh: args.fresh,
     };
     this.report(activity, this.sources);
 
-    let result: ToolResult;
-    try {
-      const ahead = this.options.readAhead?.take(args);
-      let reused = false;
-      if (ahead) {
-        result = await ahead.then((r) => ((reused = true), { ...r, callId: call.id }), () => this.inner.run(call, signal));
-      } else result = await this.inner.run(call, signal);
-      if (reused) activity.reused = true;
-    } catch (error) {
-      result = { callId: call.id, name: call.name, content: `Search failed: ${(error as Error).message}`, failed: true };
-    }
-    if (result.failed) {
-      this.report({ ...activity, failed: result.content.replace(/^Search failed:\s*/, "").slice(0, 200) }, this.sources);
-      return result;
-    }
-
     let hits: SearchHit[];
     try {
-      hits = (JSON.parse(result.content) as SearchPayload).results;
-    } catch {
-      // A server that answered in prose: pass it through unnumbered rather than lose it.
-      this.report({ ...activity, results: 0 }, this.sources);
-      return result;
+      const ahead = this.options.readAhead?.take(args);
+      hits = ahead ? await ahead.catch(() => this.search.search(args, signal)) : await this.search.search(args, signal);
+      if (ahead) activity.reused = true;
+    } catch (error) {
+      const message = (error as Error).message;
+      this.report({ ...activity, failed: message.slice(0, 200) }, this.sources);
+      return { text: `Search failed: ${message}`, failed: true };
     }
+
     const numbered = hits.map((hit) => ({ hit, source: this.number(hit, args) }));
     for (const { hit, source } of numbered) {
       // A page read twice keeps both readings: a quote from either one is a quote from the page.
@@ -168,15 +150,15 @@ export class CitedSearch implements ToolSurface {
 
     if (!numbered.length) {
       return {
-        ...result,
-        content: args.since
+        failed: false,
+        text: args.since
           ? `No results published since ${args.since}. That can mean nothing was announced, or that the pages carry no date; try without \`since\`.`
           : "No results. Try different words.",
       };
     }
     return {
-      ...result,
-      content: numbered
+      failed: false,
+      text: numbered
         .map(({ hit, source }) =>
           [`[${source.id}] ${hit.title} — ${source.domain}${hit.published ? ` — published ${hit.published}` : ""}`, hit.url, hit.excerpt.trim()].join("\n"),
         )
@@ -186,12 +168,11 @@ export class CitedSearch implements ToolSurface {
 
   /** The same page found by two searches keeps one number. */
   private number(hit: SearchHit, args: Partial<SearchInput>): Source {
-    const domain = domainOf(hit.url);
     const live = args.fresh === true;
     const known = this.byUrl.get(hit.url);
-    if (known) this.foundNow.add(known.id);
     if (known) {
-      // Seen before from the cache or a general search; a later live or site-limited read upgrades it.
+      this.foundNow.add(known.id);
+      // Seen before from the cache or a general search; a later live read upgrades it.
       if (live) known.live = true;
       return known;
     }

@@ -8,8 +8,8 @@
  * search time, which is what makes a real boundary affordable here.
  */
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { ToolCall, ToolResult } from "../../agents/conversation.ts";
-import type { ToolSpec, ToolSurface } from "../../agents/ports.ts";
+import type { ToolCall, ToolResult } from "./conversation.ts";
+import type { ToolSpec, ToolSurface } from "./ports.ts";
 
 export class McpToolSurface implements ToolSurface {
   private client?: Promise<Client>;
@@ -17,8 +17,15 @@ export class McpToolSurface implements ToolSurface {
 
   constructor(
     private readonly endpoint: URL,
+    /** Sent with every request: how the server knows which run is asking. */
+    private readonly headers: Record<string, string> = {},
     private readonly timeoutMs = 30_000,
   ) {}
+
+  async close(): Promise<void> {
+    const client = await this.client?.catch(() => undefined);
+    await client?.close().catch(() => {});
+  }
 
   async offered(): Promise<ToolSpec[]> {
     if (!this.tools) {
@@ -46,7 +53,7 @@ export class McpToolSurface implements ToolSurface {
   private connect(): Promise<Client> {
     this.client ??= (async () => {
       const client = new Client({ name: "agent-runtime", version: "1.0.0" });
-      await client.connect(new StreamableHTTPClientTransport(this.endpoint));
+      await client.connect(new StreamableHTTPClientTransport(this.endpoint, { requestInit: { headers: this.headers } }));
       return client;
     })().catch((error) => {
       this.client = undefined;

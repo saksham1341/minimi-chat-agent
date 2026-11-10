@@ -7,8 +7,8 @@
  * models need the older one), and the JSON is identical even where the TypeScript types are not.
  */
 import { parse as parsePartial, Allow } from "partial-json";
-import type { Entry, Said, ToolCall } from "../../agents/conversation.ts";
-import type { ModelDelta, ToolSpec } from "../../agents/ports.ts";
+import type { Entry, Said, ToolCall } from "../conversation.ts";
+import type { ModelDelta, ToolSpec } from "../ports.ts";
 
 type Block = Record<string, unknown>;
 export interface WireMessage {

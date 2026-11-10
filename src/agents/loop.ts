@@ -33,14 +33,17 @@ const GRACE_ROUNDS = 2;
 const LEAKED_CALL = /<\s*(?:invoke|function_calls|parameter)\b|<\/?\s*antml:/;
 const MAX_LEAK_RETRIES = 2;
 
-/** One way a turn is allowed to end, besides plain text. */
+/**
+ * One way a turn is allowed to end, besides plain text. Plain data, so it can be sent to a runtime
+ * in another process. `parse`, when given in-process, checks arguments that arrived by streaming
+ * (the provider does not validate those); without it the caller checks what comes back.
+ */
 export interface OutputShape {
   /** e.g. `comparison`; offered to the model as `answer_comparison`. */
   name: string;
   description: string;
   schema: Record<string, unknown>;
-  /** Checks arguments that arrived by streaming, which the provider no longer validates. */
-  parse(input: unknown): { ok: true; value: unknown } | { ok: false; error: string };
+  parse?(input: unknown): { ok: true; value: unknown } | { ok: false; error: string };
 }
 
 export const toolName = (shape: OutputShape) => `${ENDING_PREFIX}${shape.name}`;
@@ -67,12 +70,6 @@ export interface LoopInput {
   history?: Entry[];
   endings?: OutputShape[];
   maxRounds?: number;
-  /**
-   * A check on a plain-text answer the caller can verify (quotes against their sources, say). A
-   * problem goes back to the model once; a second failure ends the turn anyway and the caller
-   * decides how to show what did not hold up.
-   */
-  checkReply?: (text: string) => string | null;
   signal?: AbortSignal;
 }
 
@@ -115,7 +112,6 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
   let rounds = 0;
   let cutShort = false;
   let leaks = 0;
-  let replyFixes = 0;
   let lastWords = "";
   while (true) {
     if (rounds >= maxRounds + GRACE_ROUNDS) {
@@ -160,13 +156,6 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
     }
     if (said.text.trim()) lastWords = said.text.trim();
     if (calls.length === 0) {
-      const problem = input.checkReply?.(said.text);
-      if (problem && replyFixes++ < 1) {
-        record(said);
-        out.push({ type: "retract" });
-        record(asked(problem, undefined, "runtime"));
-        continue;
-      }
       record(said);
       out.push({ type: "done", shape: "reply", text: said.text, rounds, cutShort });
       return;
@@ -174,12 +163,12 @@ async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: 
 
     const ending = calls.length === 1 ? ways.get(calls[0].name) : undefined;
     if (ending) {
-      const parsed = ending.parse(calls[0].arguments);
+      const parsed = ending.parse ? ending.parse(calls[0].arguments) : { ok: true as const, value: calls[0].arguments };
       record(said);
       if (parsed.ok) {
         // The arguments are the answer, so there is nothing to run. The call is still answered,
         // because a history with an unanswered call is one the provider will refuse next turn.
-        record({ kind: "ran", results: [{ callId: calls[0].id, name: calls[0].name, content: "Shown to the user.", failed: false }] });
+        record({ kind: "ran", results: [{ callId: calls[0].id, name: calls[0].name, content: "Answer received.", failed: false }] });
         out.push({ type: "done", shape: ending.name, text: said.text, answer: parsed.value, rounds, cutShort });
         return;
       }
