@@ -8,12 +8,12 @@ import { Cite, formatDay, Prose } from "./Prose.tsx";
 type Partial<T> = { [K in keyof T]?: T[K] extends (infer U)[] ? Partial<U>[] : T[K] };
 
 interface ComparisonData { title: string; columns: string[]; rows: { name: string; url?: string; cells: string[]; sources: string[] }[]; takeaway: string }
-interface ChangesData { title: string; since: string; items: { subject: string; status: "changed" | "unchanged" | "new" | "unverified"; before?: string; now?: string; note?: string; sources: string[] }[]; summary: string }
+interface ChangesData { title: string; since: string; items: { subject: string; status: "changed" | "unchanged" | "corrected" | "new" | "unverified"; before?: string; now?: string; note?: string; sources: string[] }[]; summary: string }
 interface ChoicesData { question: string; options: { label: string; reply: string }[] }
 
 export function Artifact(props: { shape: string; answer: unknown; sources: Source[]; live: boolean; onPick: (reply: string) => void; canPick: boolean }) {
   if (!props.answer || typeof props.answer !== "object") return null;
-  if (props.shape === "comparison") return <ComparisonCard data={props.answer as Partial<ComparisonData>} sources={props.sources} />;
+  if (props.shape === "comparison") return <ComparisonCard data={props.answer as Partial<ComparisonData>} sources={props.sources} live={props.live} />;
   if (props.shape === "changes") return <ChangesCard data={props.answer as Partial<ChangesData>} sources={props.sources} />;
   if (props.shape === "choices") return <ChoicesCard data={props.answer as Partial<ChoicesData>} onPick={props.onPick} canPick={props.canPick && !props.live} />;
   return null;
@@ -28,7 +28,7 @@ const Chips = ({ ids, sources }: { ids?: string[]; sources: Source[] }) =>
     </span>
   ) : null;
 
-function ComparisonCard({ data, sources }: { data: Partial<ComparisonData>; sources: Source[] }) {
+function ComparisonCard({ data, sources, live }: { data: Partial<ComparisonData>; sources: Source[]; live: boolean }) {
   const columns = data.columns ?? [];
   return (
     <figure className="card card-comparison">
@@ -48,7 +48,9 @@ function ComparisonCard({ data, sources }: { data: Partial<ComparisonData>; sour
                   {row.url ? <a href={row.url} target="_blank" rel="noreferrer noopener">{row.name}</a> : row.name}
                   <Chips ids={row.sources} sources={sources} />
                 </th>
-                {columns.map((_, c) => <td key={c}>{row.cells?.[c] ?? ""}</td>)}
+                {columns.map((_, c) =>
+                  row.cells?.[c] !== undefined ? <td key={c}>{row.cells[c]}</td> : <td key={c} className={live ? "is-pending" : ""} />,
+                )}
               </tr>
             ))}
           </tbody>
@@ -59,7 +61,7 @@ function ComparisonCard({ data, sources }: { data: Partial<ComparisonData>; sour
   );
 }
 
-const STATUS: Record<string, string> = { changed: "Changed", new: "New", unchanged: "No change", unverified: "Couldn't verify" };
+const STATUS: Record<string, string> = { changed: "Changed", corrected: "Correction", new: "New", unchanged: "No change", unverified: "Couldn't verify" };
 
 function ChangesCard({ data, sources }: { data: Partial<ChangesData>; sources: Source[] }) {
   return (

@@ -15,7 +15,7 @@ import { asked } from "../agents/conversation.ts";
 import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, stream } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
-import { ANSWER_SHAPES } from "../domain/answers.ts";
+import { answerShapes } from "../domain/answers.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
 import type { Clock } from "../ports/clock.ts";
@@ -105,7 +105,7 @@ export class ChatService {
       at: now.toISOString(),
       question: message,
       answerText: answerAsText(shape, text, answer),
-      lead: text.trim(),
+      lead: (answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(),
       shape,
       ...(answer === undefined ? {} : { answer }),
       sources: tool.sources,
@@ -114,12 +114,16 @@ export class ChatService {
     });
 
     let spoke = "";
+    // Where the time went, one line per turn in the server log: the model's share and the search
+    // share are different problems with different fixes.
+    const started = Date.now();
+    let mark = started, modelMs = 0, toolMs = 0, rounds = 0;
     try {
       for await (const event of stream(model, tool, {
         instruction: INSTRUCTION,
         ask,
         history: store.transcript(conversation.id),
-        endings: ANSWER_SHAPES,
+        endings: answerShapes(() => tool.sources),
         signal: input.signal,
       })) {
         if (event.type === "delta") {
@@ -127,7 +131,9 @@ export class ChatService {
           if (d.type === "text") {
             spoke += d.text;
             out.push({ type: "text", text: d.text });
-          } else if (d.type === "tool_start" && !d.name.startsWith(ENDING_PREFIX)) {
+          } else if (d.type === "tool_start") {
+            // Whatever was said before a tool call is a note on the way, not the answer. For an
+            // answer shape, the conclusion is its `headline`.
             spoke = "";
             out.push({ type: "searching" });
           } else if (d.type === "tool_input" && d.name.startsWith(ENDING_PREFIX)) {
@@ -135,12 +141,21 @@ export class ChatService {
           }
         } else if (event.type === "entry") {
           fresh.push(event.entry);
+          const now = Date.now();
+          if (event.entry.kind === "said") (modelMs += now - mark), rounds++;
+          if (event.entry.kind === "ran") toolMs += now - mark;
+          mark = now;
         } else {
           const turn = record(event.shape, event.text, event.answer);
           store.append(conversation.id, [ask, ...fresh]);
           store.saveTurn(turn);
           store.touch(conversation.id, clock.now());
           out.push({ type: "done", turn, cutShort: event.cutShort });
+          const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+          log(
+            `turn ${turn.id.slice(0, 8)} ${model.info.label}${memory.recheck ? " (re-check)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
+              `${tool.sources.length} sources from ${activity.filter((a) => a.kind === "search").length} searches ${s(toolMs)}, total ${s(Date.now() - started)}, ${turn.shape}`,
+          );
           ledger.record(turn).then(
             (n) => n && log(`ledger: ${n} claim${n === 1 ? "" : "s"} recorded for turn ${turn.id}`),
             (error) => log(`ledger: ${(error as Error).message}`),

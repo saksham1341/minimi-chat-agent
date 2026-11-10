@@ -38,7 +38,7 @@ export const WEB_SEARCH: ToolSpec = {
       since: { type: "string", description: "Only pages published on or after this day, YYYY-MM-DD." },
       domains: { type: "array", items: { type: "string" }, description: "Only these sites, e.g. ['neon.tech']." },
       fresh: { type: "boolean", description: "Re-read the pages live. Slower." },
-      max_results: { type: "integer", minimum: 1, maximum: 10, description: "Default 6." },
+      max_results: { type: "integer", minimum: 1, maximum: 10, description: "Default 5." },
     },
     required: ["query"],
   },
@@ -87,9 +87,9 @@ export class WebSearchTool implements ToolSurface {
       since: input.since,
       domains: input.domains,
       fresh: input.fresh,
-      maxResults: input.max_results ?? 6,
+      maxResults: input.max_results ?? 5,
     };
-    const activity: Activity = { kind: "search", id: call.id, query: input.query, since: input.since, domains: input.domains };
+    const activity: Activity = { kind: "search", id: call.id, query: input.query, since: input.since, domains: input.domains, fresh: input.fresh };
     this.report(activity, this.sources);
 
     const timeout = AbortSignal.timeout(this.timeoutMs);
@@ -104,7 +104,7 @@ export class WebSearchTool implements ToolSurface {
     }
 
     const numbered = hits.map((hit) => ({ hit, source: this.number(hit) }));
-    this.report({ ...activity, results: hits.length }, this.sources);
+    this.report({ ...activity, results: hits.length, hits: numbered.map((n) => n.source.id) }, this.sources);
 
     if (!numbered.length) {
       return {

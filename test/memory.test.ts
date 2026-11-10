@@ -3,6 +3,7 @@ import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { TurnRecord } from "../src/domain/memory.ts";
 import { RecallService } from "../src/services/recall.ts";
 import { SearchCache, WebSearchTool } from "../src/services/web-search.ts";
+import { evidenceProblem } from "../src/domain/answers.ts";
 import type { SearchProvider } from "../src/ports/search.ts";
 
 const IST = "Asia/Kolkata";
@@ -91,5 +92,31 @@ describe("web_search tool", () => {
     const result = await new WebSearchTool(provider, new SearchCache(), () => {}).run({ id: "1", name: "web_search", arguments: { query: "q", since: "last week" } });
     expect(result.failed).toBe(true);
     expect(calls).toBe(0);
+  });
+});
+
+describe("the evidence rule for a 'changed' verdict", () => {
+  const sources = [
+    { id: "S1", url: "https://blog.example.com/old", title: "", domain: "blog.example.com", published: "2026-09-09" },
+    { id: "S2", url: "https://example.com/pricing", title: "", domain: "example.com" },
+    { id: "S3", url: "https://example.com/news", title: "", domain: "example.com", published: "2026-11-10" },
+  ];
+  const report = (sourceIds: string[], status: "changed" | "unchanged" = "changed") => ({
+    headline: "", title: "", summary: "", since: "2026-11-09",
+    items: [{ subject: "Plan price", status, sources: sourceIds }],
+  });
+
+  it("refuses a change backed only by pages from before the baseline", () => {
+    expect(evidenceProblem(report(["S1"]), sources)).toMatch(/S1 published 2026-09-09/);
+  });
+  it("refuses a change with no source", () => {
+    expect(evidenceProblem(report([]), sources)).toMatch(/cites no source/);
+  });
+  it("accepts a live page or a page from after the baseline", () => {
+    expect(evidenceProblem(report(["S1", "S2"]), sources)).toBeNull();
+    expect(evidenceProblem(report(["S3"]), sources)).toBeNull();
+  });
+  it("does not police verdicts other than 'changed'", () => {
+    expect(evidenceProblem(report(["S1"], "unchanged"), sources)).toBeNull();
   });
 });

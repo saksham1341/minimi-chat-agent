@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Conversation, type Meta } from "./api.ts";
+import { Canvas } from "./components/Canvas.tsx";
 import { Composer } from "./components/Composer.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { Turn } from "./components/Turn.tsx";
@@ -21,6 +22,9 @@ export function App() {
   const [turns, setTurns] = useState<ViewTurn[]>([]);
   const [modelId, setModelId] = useState<string | null>(localStorage.getItem(MODEL_KEY));
   const [drawer, setDrawer] = useState(false);
+  const wide = useMedia("(min-width: 1180px)");
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const [canvasOpen, setCanvasOpen] = useState(true);
   const controller = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -51,6 +55,7 @@ export function App() {
     const { conversation, turns } = await api.conversation(id);
     setConversationId(conversation.id);
     setTurns(turns.map(fromRecord));
+    setFocusId(null);
     setDrawer(false);
     stick.current = true;
   };
@@ -66,6 +71,8 @@ export function App() {
     if (!modelId || busy) return;
     const local = crypto.randomUUID();
     setTurns((all) => [...all, pending(local, message.trim())]);
+    setFocusId(null);
+    setCanvasOpen(true);
     stick.current = true;
     const abort = new AbortController();
     controller.current = abort;
@@ -73,6 +80,7 @@ export function App() {
     try {
       await api.chat({ conversationId: conversationId ?? undefined, message, modelId }, (event) => {
         if (event.type === "start") {
+          setFocusId(event.turnId);
           setConversationId(event.conversation.id);
           if (!conversationId) refresh();
         }
@@ -95,10 +103,14 @@ export function App() {
   // Every day this conversation has looked back at, so the spine shows where its answers came from.
   const recalled = [...new Set(turns.flatMap((t) => t.activity.flatMap((a) => (a.kind === "recall" ? a.days ?? [] : []))))];
   const current = conversations.find((c) => c.id === conversationId);
+  // The canvas shows the focused turn, or the latest one that did any work worth drawing.
+  const hasWork = (t: ViewTurn) => t.activity.some((a) => a.kind === "search" || a.kind === "recall") || t.shape !== "reply";
+  const canvasTurn = turns.find((t) => t.id === focusId && hasWork(t)) ?? [...turns].reverse().find(hasWork);
+  const showCanvas = wide && canvasOpen && !!canvasTurn;
   const labelOf = (id?: string) => meta?.models.find((m) => m.id === id)?.label;
 
   return (
-    <div className={`shell${drawer ? " drawer-open" : ""}`}>
+    <div className={`shell${drawer ? " drawer-open" : ""}${showCanvas ? " has-canvas" : ""}`}>
       <Sidebar conversations={conversations} currentId={conversationId} today={today} recalled={recalled} onOpen={open} onNew={startNew} />
       <button className="scrim" aria-label="Close conversations" onClick={() => setDrawer(false)} tabIndex={drawer ? 0 : -1} />
       <main className="main">
@@ -121,7 +133,19 @@ export function App() {
           {turns.length ? (
             <div className="thread">
               {turns.map((t, i) => (
-                <Turn key={t.id} turn={t} last={i === turns.length - 1} onPick={send} modelLabel={labelOf(t.model)} />
+                <Turn
+                  key={t.id}
+                  turn={t}
+                  last={i === turns.length - 1}
+                  onPick={send}
+                  modelLabel={labelOf(t.model)}
+                  canvas={showCanvas}
+                  focused={showCanvas && canvasTurn?.id === t.id}
+                  onFocus={() => {
+                    setFocusId(t.id);
+                    setCanvasOpen(true);
+                  }}
+                />
               ))}
             </div>
           ) : (
@@ -133,8 +157,22 @@ export function App() {
           <Composer meta={meta} modelId={modelId} onModel={chooseModel} onSend={send} onStop={() => controller.current?.abort()} busy={busy} />
         </div>
       </main>
+      {showCanvas && canvasTurn && (
+        <Canvas turn={canvasTurn} onPick={send} canPick={canvasTurn.id === turns.at(-1)?.id} onClose={() => setCanvasOpen(false)} />
+      )}
     </div>
   );
+}
+
+function useMedia(query: string) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => {
+    const list = window.matchMedia(query);
+    const on = () => setMatches(list.matches);
+    list.addEventListener("change", on);
+    return () => list.removeEventListener("change", on);
+  }, [query]);
+  return matches;
 }
 
 function Clock({ now }: { now: Date }) {

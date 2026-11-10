@@ -28,6 +28,8 @@ export interface Recollection {
   context: string;
   /** What to show on screen ("Looked back at Tue 3 Nov: 2 exchanges"). */
   activity: Activity[];
+  /** Earlier answers with stated facts were found: the turn is a re-check, worth more thought. */
+  recheck: boolean;
 }
 
 export class RecallService {
@@ -39,7 +41,7 @@ export class RecallService {
     const lines = [`Now: ${describeNow(now, tz)} (${tz}).`];
     const activity: Activity[] = [];
 
-    if (!looksBack) return { context: wrap(lines), activity };
+    if (!looksBack) return { context: wrap(lines), activity, recheck: false };
 
     const chosen = new Map<string, TurnRecord>();
     const keep = (turns: TurnRecord[]) => turns.forEach((t) => chosen.set(t.id, t));
@@ -67,6 +69,11 @@ export class RecallService {
     const claims = groupBy(this.store.claimsFor(turns.map((t) => t.id)), (c) => c.turnId);
 
     if (turns.length) {
+      activity.push({
+        kind: "memory",
+        exchanges: turns.map((t) => ({ at: t.at, question: t.question })),
+        claims: turns.flatMap((t) => (claims.get(t.id) ?? []).map((c) => ({ subject: c.subject, value: c.value, at: c.observedAt }))),
+      });
       lines.push("", "Earlier exchanges found in memory (oldest first):");
       for (const turn of turns) lines.push("", ...describeTurn(turn, conversationId, claims.get(turn.id) ?? [], tz));
     } else {
@@ -79,7 +86,7 @@ export class RecallService {
       for (const c of recent) lines.push(`- ${shortDate(c.createdAt, tz)}: ${c.title}`);
     }
 
-    return { context: wrap(lines), activity };
+    return { context: wrap(lines), activity, recheck: [...claims.values()].some((c) => c.length > 0) };
   }
 }
 
@@ -99,11 +106,12 @@ function describeTurn(turn: TurnRecord, currentConversation: string, claims: Cla
   const out = [
     `[${longDate(turn.at, tz)}${where}]`,
     `Person asked: ${clip(turn.question, 400)}`,
-    `You answered: ${clip(turn.answerText, 900)}`,
+    // Generous: a structured answer rendered as text is long, and clipping it drops whole options.
+    `You answered: ${clip(turn.answerText, 4000)}`,
   ];
   if (claims.length) {
     out.push("Facts you stated then (re-check these if asked whether the answer still holds):");
-    for (const c of claims.slice(0, 15)) out.push(`  - ${c.subject}: ${c.value}${c.sourceUrl ? ` (source: ${c.sourceUrl})` : ""}`);
+    for (const c of claims.slice(0, 60)) out.push(`  - ${c.subject}: ${c.value}${c.sourceUrl ? ` (source: ${c.sourceUrl})` : ""}`);
   }
   return out;
 }

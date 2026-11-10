@@ -56,7 +56,7 @@ describe("the loop", () => {
 
   it("ends on an answer shape, and answers the call so the next turn's history is valid", async () => {
     const comparison = {
-      title: "t", columns: ["price"], takeaway: "x",
+      headline: "A is cheaper.", title: "t", columns: ["price"], takeaway: "x",
       rows: [{ name: "A", cells: ["1"], sources: [] }, { name: "B", cells: ["2"], sources: [] }],
     };
     const { model } = scripted({ text: "", toolCalls: [call("x", "answer_comparison", comparison)] });

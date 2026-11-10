@@ -8,7 +8,7 @@ import { formatDay } from "./Prose.tsx";
 
 export function Trail({ activity, notes, live, sourceCount }: { activity: Activity[]; notes: string[]; live: boolean; sourceCount: number }) {
   const [open, setOpen] = useState(false);
-  if (!activity.length && !notes.length) return live ? <div className="trail"><Line icon="dot" text="Thinking" busy /></div> : null;
+  if (!activity.some((a) => a.kind !== "memory") && !notes.length) return live ? <div className="trail"><Line icon="dot" text="Thinking" busy /></div> : null;
 
   const recalls = activity.filter((a) => a.kind === "recall");
   const searches = activity.filter((a) => a.kind === "search");
@@ -29,10 +29,10 @@ export function Trail({ activity, notes, live, sourceCount }: { activity: Activi
       )}
       {expanded && (
         <ol className="trail-lines">
-          {activity.map((a, i) =>
+          {activity.filter((a) => a.kind !== "memory").map((a, i) =>
             a.kind === "recall" ? (
               <Line key={i} icon="memory" text={a.label} detail={a.detail} />
-            ) : (
+            ) : a.kind === "search" && (
               <Line
                 key={a.id}
                 icon="search"

@@ -29,7 +29,7 @@ export class TavilySearch implements SearchProvider {
       title: r.title?.trim() || r.url,
       url: r.url,
       published: r.published_date ? new Date(r.published_date).toISOString().slice(0, 10) : undefined,
-      excerpt: (r.content ?? "").slice(0, 2400),
+      excerpt: (r.content ?? "").slice(0, 1500),
     }));
   }
 }

@@ -50,11 +50,13 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
       return { ...turn, text: turn.text + event.text };
     case "searching":
       return turn.text.trim() ? { ...turn, notes: [...turn.notes, turn.text.trim()], text: "" } : turn;
-    case "shape":
-      return { ...turn, shape: event.shape, answer: event.partial };
+    case "shape": {
+      const headline = (event.partial as { headline?: string } | null)?.headline;
+      return { ...turn, shape: event.shape, answer: event.partial, ...(headline ? { text: headline } : {}) };
+    }
     case "done": {
       const t = event.turn;
-      return { ...turn, status: "done", text: turn.text, shape: t.shape, answer: t.answer, sources: t.sources, activity: t.activity, cutShort: event.cutShort };
+      return { ...turn, status: "done", text: t.lead, shape: t.shape, answer: t.answer, sources: t.sources, activity: t.activity, cutShort: event.cutShort };
     }
     case "error":
       return { ...turn, status: "error", error: event.message };

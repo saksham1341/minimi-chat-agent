@@ -19,7 +19,9 @@ export interface Source {
 /** One thing the agent did on the way to an answer, shown to the person as it happens. */
 export type Activity =
   | { kind: "recall"; label: string; detail?: string; /** Local days looked at, YYYY-MM-DD. */ days?: string[] }
-  | { kind: "search"; id: string; query: string; since?: string; domains?: string[]; results?: number; failed?: string };
+  | { kind: "search"; id: string; query: string; since?: string; domains?: string[]; fresh?: boolean; results?: number; failed?: string; hits?: string[] }
+  /** What recall put in front of the model, for the canvas: the exchanges and the facts stated then. */
+  | { kind: "memory"; exchanges: { at: string; question: string }[]; claims: { subject: string; value: string; at: string }[] };
 
 /** One question and its answer, as the person saw it. What recall searches. */
 export interface TurnRecord {
