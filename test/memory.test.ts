@@ -58,7 +58,7 @@ describe("recall", () => {
 
   it("is not fooled by names, numbers or filler that look like dates", () => {
     expect(asked("Has Monday.com changed its pricing?")).not.toContain("Person asked");
-    expect(asked("Give me 5 tools for note taking")).not.toContain("Person asked");
+    expect(asked("Give me 5 ideas for a birthday dinner")).not.toContain("Person asked");
     expect(asked("Do I need to run anything now before the upgrade, one thing at a time?")).not.toContain("Person asked");
   });
 

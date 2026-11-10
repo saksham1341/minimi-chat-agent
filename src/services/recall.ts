@@ -52,11 +52,13 @@ export interface Recollection {
 const WINDOW_DAYS = 120;
 const CALENDAR_WEEKS = 3;
 
-interface Scored {
+interface Match {
   turn: TurnRecord;
-  date: number;
+  /** The message names this exchange's day. */
+  dated: boolean;
+  /** Rare words the message shares with it. */
   topic: number;
-  score: number;
+  age: number;
 }
 
 export class RecallService {
@@ -72,7 +74,7 @@ export class RecallService {
     return [...byDay.entries()].map(([day, group]) => ({
       day,
       label: dayLabel(ymdOf(day)),
-      byDay: group.some((k) => k.date >= 1),
+      byDay: group.some((k) => k.dated),
       questions: [...new Set(group.map((k) => k.turn.question))].slice(0, 3),
     }));
   }
@@ -83,14 +85,14 @@ export class RecallService {
     const lines = [`Now: ${describeNow(now, tz)} (${tz}).`];
     const activity: Activity[] = [];
     const { kept, recent } = this.match(message, conversationId, now, tz);
-    const dated = kept.filter((k) => k.date >= 1);
+    const dated = kept.filter((k) => k.dated);
 
     // The calendar, so the model reads which day is meant instead of working it out.
     lines.push("", ...calendar(today, tz, recent));
     return this.describe(conversationId, tz, topics, lines, activity, kept, dated);
   }
 
-  private match(message: string, conversationId: string, now: Date, tz: string): { kept: Scored[]; recent: TurnRecord[] } {
+  private match(message: string, conversationId: string, now: Date, tz: string): { kept: Match[]; recent: TurnRecord[] } {
     const today = dateIn(now, tz);
     const words = new Set(tokens(message));
     const rare = this.rareTerms(topicTerms(message), now);
@@ -100,23 +102,21 @@ export class RecallService {
     const older = rare.length ? this.store.searchTurns(rare, 8, conversationId, now) : [];
     const candidates = new Map([...recent, ...older].map((t) => [t.id, t]));
 
-    // One shared word is enough only when it is distinctive as written (a name or acronym the
-    // person capitalised mid-sentence: "CRMs", "Neon"); otherwise two shared rare words are needed.
-    const names = rare.filter((t) => writtenAsName(message, t));
-    const scored: Scored[] = [];
+    // Recalled if the message names its day, or shares enough rare words with it: two, or the one
+    // rare word the message has. No weights; the model, with the calendar, decides what is meant.
+    const enough = Math.min(2, rare.length);
+    const matches: Match[] = [];
     for (const turn of candidates.values()) {
       const day = dateIn(new Date(turn.at), tz);
-      const date = dayMatch(dayWords(day, today), words);
+      const dated = namesDay(dayWords(day, today), words);
       // Exchanges earlier in this conversation are already in the transcript; only a day named
       // in the message brings them back here.
       const topic = turn.conversationId === conversationId ? 0 : overlap(turn, rare);
-      const strongTopic = topic >= 2 || (topic === 1 && overlap(turn, names) === 1);
-      if (date < 1 && !strongTopic) continue;
-      const age = daysBetween(day, today);
-      scored.push({ turn, date, topic, score: date + 0.8 * topic + 0.1 * Math.max(0, 1 - age / WINDOW_DAYS) });
+      if (dated || (enough && topic >= enough)) matches.push({ turn, dated, topic, age: daysBetween(day, today) });
     }
-    scored.sort((a, b) => b.score - a.score);
-    return { kept: scored.slice(0, 10), recent };
+    // Most shared topic first, then most recent: which of two Tuesdays is meant shows here.
+    matches.sort((a, b) => b.topic - a.topic || a.age - b.age);
+    return { kept: matches.slice(0, 10), recent };
   }
 
   private describe(
@@ -125,15 +125,15 @@ export class RecallService {
     topics: string[],
     lines: string[],
     activity: Activity[],
-    kept: Scored[],
-    dated: Scored[],
+    kept: Match[],
+    dated: Match[],
   ): Recollection {
 
     if (kept.length) {
       const byDay = groupBy(kept, (k) => isoDay(dateIn(new Date(k.turn.at), tz)));
       for (const [day, group] of byDay) {
         const n = group.length;
-        const datedHere = group.some((k) => k.date >= 1);
+        const datedHere = group.some((k) => k.dated);
         activity.push({
           kind: "recall",
           label: `${datedHere ? "Looked back at" : "Matched by topic:"} ${dayLabel(ymdOf(day))}: ${n} exchange${n === 1 ? "" : "s"}`,
@@ -179,19 +179,17 @@ export class RecallService {
 }
 
 /**
- * How strongly the message names this day, by the words it shares with it. A weekday, a month
- * with its day number, or a relative phrase that holds for it ("yesterday", "last week") each
- * count fully; a month alone a little; a bare number nothing ("5 tools" is not the 5th).
+ * Does the message name this day? It does if it shares the day's weekday, its month together with
+ * its day number, or its whole relative phrase ("yesterday", "last week"). A bare number does not
+ * ("5 tools" is not the 5th), nor a month on its own.
  */
-function dayMatch(day: DayWords, words: Set<string>): number {
+function namesDay(day: DayWords, words: Set<string>): boolean {
   const has = (w: string) => words.has(w) || words.has(w.slice(0, 3));
-  let score = 0;
-  if (has(day.weekday)) score += 1;
-  const month = has(day.month);
-  if (month && words.has(day.day)) score += 1.2;
-  else if (month) score += 0.3;
-  if (day.relative.length && day.relative.every((w) => words.has(w))) score += 1;
-  return score;
+  return (
+    has(day.weekday) ||
+    (has(day.month) && words.has(day.day)) ||
+    (day.relative.length > 0 && day.relative.every((w) => words.has(w)))
+  );
 }
 
 /** The last few weeks as the person would see them on a wall calendar, with what was asked when. */
@@ -218,13 +216,6 @@ const ymdOf = (iso: string): Ymd => {
   const [y, m, d] = iso.split("-").map(Number);
   return { y, m, d };
 };
-
-/** Did the person write this word with a capital somewhere other than at the start of a sentence? */
-function writtenAsName(message: string, term: string): boolean {
-  return [...message.matchAll(/[A-Za-z0-9][\w.'-]*/g)].some(
-    (m) => m[0].toLowerCase().startsWith(term) && /[A-Z]/.test(m[0]) && !/(?:^|[.!?]\s+)$/.test(message.slice(0, m.index)),
-  );
-}
 
 /** Words as written, kept whole ("monday.com" is one word, not Monday); ordinals as numbers. */
 function tokens(text: string): string[] {
