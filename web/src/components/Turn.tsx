@@ -79,7 +79,7 @@ function Status({ turn, onOpen }: { turn: ViewTurn; onOpen: () => void }) {
   const label =
     step === "search" && own
       ? `Searching${own > 1 ? ` ${own} at once` : ""}`
-      : step === "read" || (step === "search" && !own && turn.sources.length)
+      : (step === "read" || step === "search") && turn.sources.length
         ? `Reading ${turn.sources.length} sources`
         : step === "write"
           ? "Writing"

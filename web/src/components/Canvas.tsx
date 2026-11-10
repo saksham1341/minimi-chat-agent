@@ -18,8 +18,9 @@ type State = "done" | "active" | "waiting" | "skipped";
 export function phases(turn: ViewTurn): Record<Step, State> {
   const live = turn.status === "streaming";
   const recalled = turn.activity.some((a) => a.kind === "recall");
-  const searches = turn.activity.filter((a): a is Search => a.kind === "search");
-  const searching = searches.some((s) => !s.ahead && s.results === undefined && !s.failed);
+  // The steps follow the model's own searches; a read-ahead nobody has claimed yet is not one.
+  const searches = turn.activity.filter((a): a is Search => a.kind === "search" && (!a.ahead || !!a.reused));
+  const searching = searches.some((s) => s.results === undefined && !s.failed);
   const writing = !!turn.text || turn.answer !== undefined;
   const settled = (cond: boolean, active: boolean): State => (active ? "active" : cond ? "done" : live ? "waiting" : "skipped");
   return {
