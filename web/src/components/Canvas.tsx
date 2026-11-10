@@ -7,8 +7,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Activity, Source } from "../api.ts";
 import type { ViewTurn } from "../view.ts";
 import { Artifact } from "./Artifacts.tsx";
-import { Cite, formatDay } from "./Prose.tsx";
-import { Chevron } from "./Trail.tsx";
+import { Cite, citedIds, formatDay } from "./Prose.tsx";
+import { Chevron } from "./icons.tsx";
 
 type Search = Extract<Activity, { kind: "search" }>;
 type Memory = Extract<Activity, { kind: "memory" }>;
@@ -23,7 +23,8 @@ export function phases(turn: ViewTurn): Record<Step, State> {
   const writing = !!turn.text || turn.answer !== undefined;
   const settled = (cond: boolean, active: boolean): State => (active ? "active" : cond ? "done" : live ? "waiting" : "skipped");
   return {
-    remember: recalled ? "done" : live && !searches.length && !writing ? "active" : "skipped",
+    // Recall happens before the model starts, so it is either done or did not apply.
+    remember: recalled ? "done" : "skipped",
     search: settled(searches.length > 0, searching),
     read: settled(searches.length > 0 && !searching && writing, live && searches.length > 0 && !searching && !writing),
     write: settled(writing && !live, live && writing),
@@ -39,6 +40,9 @@ export function Canvas({ turn, onPick, canPick, onClose, sheet }: { turn: ViewTu
   const recalls = turn.activity.filter((a) => a.kind === "recall");
   const searches = turn.activity.filter((a): a is Search => a.kind === "search");
   const hasArtifact = turn.shape !== "reply" && turn.shape !== "choices" && turn.answer !== undefined;
+  const cited = citedIds(turn.text, JSON.stringify(turn.answer ?? ""))
+    .map((id) => turn.sources.find((s) => s.id === id))
+    .filter((s): s is Source => !!s);
 
   // When the answer starts drawing, bring it into view: it is what the person is waiting for.
   const body = useRef<HTMLDivElement>(null);
@@ -93,6 +97,26 @@ export function Canvas({ turn, onPick, canPick, onClose, sheet }: { turn: ViewTu
                 <SearchLane key={s.id} search={s} sources={turn.sources} />
               ))}
             </ul>
+            {turn.notes.map((n, i) => (
+              <p key={i} className="canvas-note">{n}</p>
+            ))}
+          </Fold>
+        )}
+
+        {!live && cited.length > 0 && (
+          <Fold title="Sources cited" count={cited.length} open={!hasArtifact}>
+            <ol className="sources">
+              {cited.map((s) => (
+                <li key={s.id}>
+                  <a href={s.url} target="_blank" rel="noreferrer noopener">
+                    <span className="source-id">{s.id.slice(1)}</span>
+                    <span className="source-domain">{s.domain}</span>
+                    <span className="source-title">{s.title}</span>
+                    {s.published && <span className="source-date">{formatDay(s.published)}</span>}
+                  </a>
+                </li>
+              ))}
+            </ol>
           </Fold>
         )}
       </div>

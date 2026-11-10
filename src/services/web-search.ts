@@ -155,11 +155,23 @@ export class CitedSearch implements ToolSurface {
       title: hit.title,
       domain: domainOf(hit.url),
       ...(hit.published ? { published: hit.published } : {}),
+      ...(snippetOf(hit.excerpt) ? { snippet: snippetOf(hit.excerpt) } : {}),
     };
     this.sources.push(source);
     this.byUrl.set(hit.url, source);
     return source;
   }
+}
+
+/** The first readable stretch of a passage: markdown, headings and link syntax stripped, ~240 chars. */
+function snippetOf(excerpt: string): string {
+  const text = excerpt
+    .split("\n…\n")[0]
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[#*_`>|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text.length > 240 ? `${text.slice(0, 237).replace(/\s+\S*$/, "")}…` : text;
 }
 
 function domainOf(url: string): string {

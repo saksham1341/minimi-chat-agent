@@ -14,6 +14,8 @@ export interface Source {
   title: string;
   domain: string;
   published?: string;
+  /** The opening of the passage the search returned, for the citation preview. */
+  snippet?: string;
 }
 
 /** One thing the agent did on the way to an answer, shown to the person as it happens. */

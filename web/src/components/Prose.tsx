@@ -1,4 +1,6 @@
 /** Markdown with [S#] citations turned into source chips that show where a fact came from. */
+import { useId, useRef, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Source } from "../api.ts";
@@ -36,18 +38,133 @@ export function Prose({ text, sources, className }: { text: string; sources: Sou
   );
 }
 
+/**
+ * A citation marker, like a footnote on Wikipedia. Pointing at it (or focusing it) previews the
+ * source: site, title, date and the passage the answer drew on. On a touch screen, where there is
+ * no hover, a tap opens the same preview as a bottom sheet with a button to open the page.
+ */
 export function Cite({ id, sources }: { id: string; sources: Source[] }) {
   const source = sources.find((s) => s.id === id);
+  const key = useId();
+  const open = useSyncExternalStore(preview.subscribe, () => preview.current?.key === key);
+  const anchor = useRef<HTMLAnchorElement>(null);
+  const pointer = useRef<string>("mouse");
   if (!source) return <span className="cite cite-missing">{id.slice(1)}</span>;
+
+  const show = (mode: Mode) => anchor.current && preview.show({ key, source, rect: anchor.current.getBoundingClientRect(), mode });
   return (
-    <a className="cite" href={source.url} target="_blank" rel="noreferrer noopener" aria-label={`Source: ${source.title}, ${source.domain}`}>
-      {id.slice(1)}
-      <span className="cite-card" role="tooltip">
-        <span className="cite-domain">{source.domain}</span>
-        <span className="cite-title">{source.title}</span>
-        {source.published && <span className="cite-date">Published {formatDay(source.published)}</span>}
+    <>
+      <a
+        ref={anchor}
+        className={`cite${open ? " is-open" : ""}`}
+        href={source.url}
+        target="_blank"
+        rel="noreferrer noopener"
+        aria-label={`Source ${id.slice(1)}: ${source.title}, ${source.domain}`}
+        aria-expanded={open}
+        onPointerDown={(e) => (pointer.current = e.pointerType)}
+        onPointerEnter={(e) => e.pointerType === "mouse" && preview.soon(() => show("hover"))}
+        onPointerLeave={(e) => e.pointerType === "mouse" && preview.later()}
+        // Keyboard focus previews; focus that comes with a tap or click is handled on click.
+        onFocus={(e) => e.currentTarget.matches(":focus-visible") && show("hover")}
+        onBlur={() => preview.later()}
+        onClick={(e) => {
+          // A finger has no hover, so the tap itself previews (as a sheet) and the sheet's
+          // button opens the page. Decided by what tapped, not by what the screen claims.
+          if (pointer.current === "touch" || pointer.current === "pen") {
+            e.preventDefault();
+            show("sheet");
+          }
+        }}
+      >
+        {id.slice(1)}
+      </a>
+      {open && preview.current && createPortal(<Preview {...preview.current} />, document.body)}
+    </>
+  );
+}
+
+type Mode = "hover" | "sheet";
+interface Shown {
+  key: string;
+  source: Source;
+  rect: DOMRect;
+  mode: Mode;
+}
+
+/** One preview open at a time, shared by every marker on the page. */
+const preview = (() => {
+  const listeners = new Set<() => void>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const api = {
+    current: null as Shown | null,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set(next: Shown | null) {
+      clearTimeout(timer);
+      api.current = next;
+      listeners.forEach((l) => l());
+    },
+    show(next: Shown) {
+      api.set(next);
+    },
+    soon(fn: () => void) {
+      clearTimeout(timer);
+      timer = setTimeout(fn, 160);
+    },
+    later() {
+      clearTimeout(timer);
+      timer = setTimeout(() => api.set(null), 140);
+    },
+    hold() {
+      clearTimeout(timer);
+    },
+  };
+  if (typeof window !== "undefined") {
+    window.addEventListener("keydown", (e) => e.key === "Escape" && api.set(null));
+    window.addEventListener("scroll", () => api.current?.mode === "hover" && api.set(null), true);
+  }
+  return api;
+})();
+
+function Preview({ source, rect, mode }: Shown) {
+  const body = (
+    <>
+      <span className="preview-site">
+        <span className="preview-initial" aria-hidden>{source.domain.slice(0, 1).toUpperCase()}</span>
+        {source.domain}
+        {source.published && <span className="preview-date">{formatDay(source.published)}</span>}
       </span>
-    </a>
+      <span className="preview-title">{source.title}</span>
+      {source.snippet && <span className="preview-snippet">{source.snippet}</span>}
+    </>
+  );
+
+  if (mode === "sheet") {
+    return (
+      <div className="cite-sheet-scrim" onClick={() => preview.set(null)}>
+        <div className="cite-sheet" role="dialog" aria-label={`Source: ${source.title}`} onClick={(e) => e.stopPropagation()}>
+          <span className="sheet-grip" aria-hidden />
+          {body}
+          <a className="preview-open" href={source.url} target="_blank" rel="noreferrer noopener">
+            Open {source.domain}
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  // Above the marker when there is room, below when not; kept inside the window sideways.
+  const width = Math.min(336, innerWidth - 16);
+  const left = Math.min(Math.max(8, rect.left + rect.width / 2 - width / 2), innerWidth - width - 8);
+  const above = rect.top > 230;
+  const style = above ? { left, width, bottom: innerHeight - rect.top + 8 } : { left, width, top: rect.bottom + 8 };
+  return (
+    <span className={`cite-preview${above ? " is-above" : ""}`} style={style} role="tooltip" onPointerEnter={() => preview.hold()} onPointerLeave={() => preview.later()}>
+      {body}
+    </span>
   );
 }
 

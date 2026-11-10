@@ -1,7 +1,7 @@
 /** Where the person types, picks the model, and stops an answer they no longer need. */
 import { useEffect, useRef, useState } from "react";
 import type { Meta } from "../api.ts";
-import { Chevron } from "./Trail.tsx";
+import { Chevron } from "./icons.tsx";
 
 export function Composer(props: {
   meta: Meta | null;

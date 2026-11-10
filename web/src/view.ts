@@ -8,7 +8,7 @@ export interface ViewTurn {
   status: "streaming" | "done" | "error";
   /** Text of the round in progress, or the final answer. */
   text: string;
-  /** What the model said before it went to search: shown in the trail, not as the answer. */
+  /** What the model said before it went to search: a working note, shown in the canvas, not as the answer. */
   notes: string[];
   activity: Activity[];
   sources: Source[];
