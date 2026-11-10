@@ -15,9 +15,11 @@ The test questions are not really search questions. "On Monday we shortlisted 5 
 A turn runs in four steps (`src/services/chat.ts`):
 
 1. **Recall, before the model is called.** Code, not the model, resolves "Monday", "3 November" and "last Tuesday" into instants in the person's time zone (`src/domain/time.ts`). It biases to the past and names both readings when "last Monday" is ambiguous. It reads the conversations from those days and full-text matches the topic (SQLite FTS5), then writes the result into a `<context>` block on the message: the current time, the resolved dates, what was asked and answered, and the facts stated then. This takes milliseconds.
-2. **The loop.** The model searches and answers. Several searches in one turn run in parallel, and all their results go back in one message. A failed search comes back as a failed result rather than vanishing. After a fixed number of rounds the search tool is withdrawn and the model is told to answer with what it has. Results are numbered per answer (`[S1]`…) so every fact can be cited and checked.
-3. **An answer has a shape.** Plain text is a reply. A comparison of three or more options, a "what changed since" report and a clarifying question are tools whose arguments *are* the answer. The provider checks them against a schema, they stream in, and the UI draws each as its own card.
+2. **The loop.** The model searches and answers. Its one tool reaches it over MCP: the search service is an MCP server at `/mcp` in the same process, and the runtime is an MCP client that knows no tool by name. Several searches in one turn run in parallel, and all their results go back in one message. A failed search comes back as a failed result rather than vanishing. After a fixed number of rounds the search tool is withdrawn and the model is told to answer with what it has. Results are numbered per answer (`[S1]`…) so every fact can be cited and checked.
+3. **An answer has a shape.** Plain text is a reply. A comparison of three or more options, a "what changed since" report and a clarifying question are tools whose arguments *are* the answer. Each opens with a one-line `headline` (the conclusion), and anything the model said before calling one is treated as a working note, not the answer. The provider checks them against a schema, they stream in, and the UI draws each as its own card. The harness also enforces one rule it can check itself: a "changed" verdict must cite a source that is a live page or dated after the baseline. A page from before can't show a change, so the answer is sent back to be fixed. And "corrected" exists for when the earlier answer was simply wrong.
 4. **The ledger, after the answer is on screen.** The facts the answer stated (prices, limits, dates) are recorded with their source and the time they were seen. Structured answers already are claims; prose goes through a small model in the background. So "is your answer still correct?" becomes a list of specific facts to re-check, with `since` set to the day they were stated.
+
+On a wide screen a **canvas** beside the chat shows the work as it happens: the step (remember, search, read, write), what was recalled and the facts stated then, each search as a lane with its sources landing in it, then the card filling in cell by cell. The model's time doesn't shrink, but something real is on screen from the first couple of seconds. Each turn logs where its time went (model rounds versus searches), because those are different problems with different fixes.
 
 ## Why it's built this way
 
@@ -25,9 +27,10 @@ A turn runs in four steps (`src/services/chat.ts`):
 - **Ports and adapters** (from Keel, my own agent framework, ported from Python):
   - `agents/` is the runtime: the loop and model adapters. It imports nothing of the app.
   - `domain/` holds rules with no I/O, and `ports/` + `adapters/` hold everything outside the process.
-  - `services/` holds the operations, `api/` is a thin HTTP interface, and `assembly.ts` is the one place that reads the environment.
+  - `services/` holds the operations, `api/` holds the thin interfaces (HTTP for people, MCP for agents), and `assembly.ts` is the one place that reads the environment.
   - A test (`test/layers.test.ts`) fails if a layer imports the wrong way.
   - A missing key is a named adapter that refuses honestly (`AbsentSearch`), never a `null` and an `if`.
+- **Tools as a service over MCP.** The runtime reaches web search the way it would reach any tool server, so the agent's capabilities are whatever server `MCP_ENDPOINT` names (by default, this process). The search service can be swapped, or reused by another agent, without touching the loop. In-process the hop costs milliseconds against seconds of model and search time, and `/mcp` answers only loopback unless `MCP_ALLOW_REMOTE=true`.
 - **The model picker is the adapter list.** Anthropic (Opus, Sonnet and Haiku 5.5) and Bedrock (Sonnet 4.5) are adapters on one port, registered only when their keys are set. Each adapter replays its own reasoning blocks and rebuilds turns another provider wrote, so switching models mid-conversation is safe.
 - **Fast where people notice:**
   - Tokens stream to the screen.
@@ -44,6 +47,7 @@ A turn runs in four steps (`src/services/chat.ts`):
 - **Embeddings for memory.** Questions name products and days, which FTS5 and date ranges match exactly. Vectors would add a dependency and a model for no gain at this scale.
 - **Every answer as JSON.** Chat should stream as prose. Only answers whose structure helps the reader are shapes.
 - **An SDK tool runner or agent framework.** The loop's invariants (one message per parallel round, failures returned, a ceiling, endings) fail quietly if a library decides them, so they are about 180 lines here, with tests.
+- **More thinking on re-checks.** Tried it: it added 15–20 s to a re-check and didn't change the verdict. The evidence rule in the harness was what fixed wrong "changed" calls.
 - **Porting all of Keel.** Tenancy, proposals, jobs and versioning are for multi-user systems. Only its layering and rules came over.
 
 ## With another week

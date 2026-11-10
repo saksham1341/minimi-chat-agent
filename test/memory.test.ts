@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { TurnRecord } from "../src/domain/memory.ts";
 import { RecallService } from "../src/services/recall.ts";
-import { SearchCache, WebSearchTool } from "../src/services/web-search.ts";
+import { CitedSearch, SEARCH_TOOL, SearchService } from "../src/services/web-search.ts";
+import { McpToolSurface } from "../src/agents/mcp-tools.ts";
+import type { ToolSurface } from "../src/agents/ports.ts";
+import { handleMcp } from "../src/api/mcp.ts";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { evidenceProblem } from "../src/domain/answers.ts";
 import type { SearchProvider } from "../src/ports/search.ts";
 
@@ -55,15 +60,27 @@ describe("recall", () => {
   });
 });
 
-describe("web_search tool", () => {
+describe("web search", () => {
   const hits = (urls: string[]) => urls.map((url) => ({ title: url, url, excerpt: "…" }));
+  const provider = (search: SearchProvider["search"]): SearchProvider => ({ name: "fake", available: true, search });
+  /** The service behind a stand-in for the MCP hop: the same JSON the server sends. */
+  const surface = (service: SearchService): ToolSurface => ({
+    offered: () => [],
+    run: async (call) => {
+      try {
+        return { callId: call.id, name: call.name, failed: false, content: JSON.stringify({ results: await service.search(call.arguments as never) }) };
+      } catch (error) {
+        return { callId: call.id, name: call.name, failed: true, content: `Search failed: ${(error as Error).message}` };
+      }
+    },
+  });
 
-  it("numbers sources once per page across searches in a turn", async () => {
-    const provider: SearchProvider = { name: "fake", available: true, search: async (q) => hits(q.query === "a" ? ["https://x.com/1", "https://y.com/2"] : ["https://y.com/2", "https://z.com/3"]) };
-    const tool = new WebSearchTool(provider, new SearchCache(), () => {});
-    const first = await tool.run({ id: "1", name: "web_search", arguments: { query: "a" } });
-    const second = await tool.run({ id: "2", name: "web_search", arguments: { query: "b" } });
-    expect(tool.sources.map((s) => s.id)).toEqual(["S1", "S2", "S3"]);
+  it("numbers sources once per page across searches in an answer", async () => {
+    const service = new SearchService(provider(async (q) => hits(q.query === "a" ? ["https://x.com/1", "https://y.com/2"] : ["https://y.com/2", "https://z.com/3"])));
+    const cited = new CitedSearch(surface(service), () => {});
+    const first = await cited.run({ id: "1", name: "web_search", arguments: { query: "a" } });
+    const second = await cited.run({ id: "2", name: "web_search", arguments: { query: "b" } });
+    expect(cited.sources.map((s) => s.id)).toEqual(["S1", "S2", "S3"]);
     expect(first.content).toContain("[S2]");
     expect(second.content).toContain("[S2]");
     expect(second.content).toContain("[S3]");
@@ -71,27 +88,46 @@ describe("web_search tool", () => {
 
   it("asks the provider once for a repeated query", async () => {
     let calls = 0;
-    const provider: SearchProvider = { name: "fake", available: true, search: async () => (calls++, hits(["https://x.com"])) };
-    const cache = new SearchCache();
-    await new WebSearchTool(provider, cache, () => {}).run({ id: "1", name: "web_search", arguments: { query: "same" } });
-    await new WebSearchTool(provider, cache, () => {}).run({ id: "2", name: "web_search", arguments: { query: "same" } });
+    const service = new SearchService(provider(async () => (calls++, hits(["https://x.com"]))));
+    await service.search({ query: "same" });
+    await service.search({ query: "same" });
     expect(calls).toBe(1);
   });
 
   it("reports a failing provider as a failed result and a failed activity", async () => {
-    const provider: SearchProvider = { name: "fake", available: true, search: async () => { throw new Error("429"); } };
+    const service = new SearchService(provider(async () => { throw new Error("429"); }));
     const seen: string[] = [];
-    const result = await new WebSearchTool(provider, new SearchCache(), (a) => a.kind === "search" && a.failed && seen.push(a.failed)).run({ id: "1", name: "web_search", arguments: { query: "q" } });
+    const result = await new CitedSearch(surface(service), (a) => { if (a.kind === "search" && a.failed) seen.push(a.failed); }).run({ id: "1", name: "web_search", arguments: { query: "q" } });
     expect(result.failed).toBe(true);
     expect(seen).toEqual(["429"]);
   });
+});
 
-  it("rejects malformed arguments without calling the provider", async () => {
-    let calls = 0;
-    const provider: SearchProvider = { name: "fake", available: true, search: async () => (calls++, []) };
-    const result = await new WebSearchTool(provider, new SearchCache(), () => {}).run({ id: "1", name: "web_search", arguments: { query: "q", since: "last week" } });
-    expect(result.failed).toBe(true);
-    expect(calls).toBe(0);
+describe("the MCP boundary", () => {
+  it("serves search to the runtime over MCP, with the contract the service declares", async () => {
+    const searched: string[] = [];
+    const fake: SearchProvider = { name: "fake", available: true, search: async (q) => (searched.push(q.query), [{ title: "Neon pricing", url: "https://neon.tech/pricing", excerpt: "Launch $19" }]) };
+    const service = new SearchService(fake);
+    const server = createServer((req, res) => void handleMcp(service, req, res));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      const runtime = new McpToolSurface(new URL(`http://127.0.0.1:${port}/mcp`));
+      const offered = await runtime.offered();
+      expect(offered.map((t) => t.name)).toEqual([SEARCH_TOOL.name]);
+      expect(Object.keys((offered[0].inputSchema as { properties: object }).properties)).toContain("since");
+
+      const cited = new CitedSearch(runtime, () => {});
+      const result = await cited.run({ id: "1", name: "web_search", arguments: { query: "neon pricing" } });
+      expect(searched).toEqual(["neon pricing"]);
+      expect(result.content).toContain("[S1] Neon pricing");
+
+      const refused = await runtime.run({ id: "2", name: "web_search", arguments: { query: "x", since: "last week" } });
+      expect(refused.failed).toBe(true);
+      expect(searched).toEqual(["neon pricing"]);
+    } finally {
+      server.close();
+    }
   });
 });
 

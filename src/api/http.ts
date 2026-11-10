@@ -6,6 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { readFile, stat } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import type { App } from "../assembly.ts";
+import { handleMcp } from "./mcp.ts";
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
@@ -26,6 +27,11 @@ export function serve(app: App, staticDir: string) {
         return json(res, { conversation, turns: app.store.turns(conversation.id) });
       }
       if (path === "/api/chat" && req.method === "POST") return chat(app, req, res);
+      if (path === "/mcp") {
+        // The tool server is for the runtime, which by default is this same process.
+        if (!app.settings.mcpAllowRemote && !isLoopback(req.socket.remoteAddress)) return json(res, { error: "forbidden" }, 403);
+        return handleMcp(app.search, req, res);
+      }
       if (path.startsWith("/api/")) return json(res, { error: "not found" }, 404);
       return file(res, staticDir, path);
     } catch (error) {
@@ -39,7 +45,7 @@ function meta(app: App) {
   return {
     models: app.catalog.list(),
     defaultModel: app.catalog.defaultId ?? null,
-    search: { provider: app.search.name, available: app.search.available },
+    search: { provider: app.search.providerName, available: app.search.available },
     now: app.clock.now().toISOString(),
     timeZone: app.settings.timeZone,
   };
@@ -67,6 +73,10 @@ async function chat(app: App, req: IncomingMessage, res: ServerResponse) {
   }
   finished = true;
   res.end();
+}
+
+function isLoopback(address?: string) {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 function validZone(zone?: string) {

@@ -80,7 +80,7 @@ export function stream(model: ChatModel, tools: ToolSurface, input: LoopInput): 
 async function run(model: ChatModel, tools: ToolSurface, input: LoopInput, out: Channel<LoopEvent>) {
   const endings = input.endings ?? [];
   const maxRounds = input.maxRounds ?? DEFAULT_MAX_ROUNDS;
-  const offeredTools = tools.offered();
+  const offeredTools = await tools.offered();
   const trespassing = offeredTools.filter((t) => t.name.startsWith(ENDING_PREFIX)).map((t) => t.name);
   if (trespassing.length) throw new Error(`${trespassing.join(", ")} would be read as an ending`);
 

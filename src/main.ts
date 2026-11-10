@@ -26,7 +26,7 @@ server.listen(app.settings.port, app.settings.host, () => {
   }
   console.log("");
   console.log(`  models   ${models.length ? models.map((m) => m.label).join(", ") : "none — set ANTHROPIC_API_KEY or AWS Bedrock credentials in .env"}`);
-  console.log(`  search   ${app.search.available ? app.search.name : "off — set EXA_API_KEY or TAVILY_API_KEY in .env"}`);
+  console.log(`  search   ${app.search.available ? `${app.search.providerName}, served over MCP at /mcp` : "off — set EXA_API_KEY or TAVILY_API_KEY in .env"}`);
   console.log(`  clock    ${app.clock.now().toISOString()}${app.settings.now ? " (AGENT_NOW)" : ""}, ${app.settings.timeZone}`);
   console.log(`  memory   ${app.settings.dataFile}\n`);
 });

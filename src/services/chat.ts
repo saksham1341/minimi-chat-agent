@@ -20,12 +20,12 @@ import type { Activity, Conversation, Source, TurnRecord } from "../domain/memor
 import { answerAsText } from "../domain/render.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { MemoryStore } from "../ports/memory.ts";
-import type { SearchProvider } from "../ports/search.ts";
+import type { ToolSurface } from "../agents/ports.ts";
 import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
 import type { LedgerService } from "./ledger.ts";
 import type { RecallService } from "./recall.ts";
-import { SearchCache, WebSearchTool } from "./web-search.ts";
+import { CitedSearch } from "./web-search.ts";
 
 export type TurnEvent =
   | { type: "start"; conversation: Conversation; turnId: string; at: string; model: ModelInfo }
@@ -47,14 +47,13 @@ export interface TurnInput {
 }
 
 export class ChatService {
-  private readonly cache = new SearchCache();
-
   constructor(
     private readonly deps: {
       store: MemoryStore;
       clock: Clock;
       models: ModelCatalog;
-      search: SearchProvider;
+      /** The runtime's tools: over MCP in production, anything satisfying the port in tests. */
+      tools: ToolSurface;
       recall: RecallService;
       ledger: LedgerService;
       log: (message: string) => void;
@@ -74,7 +73,7 @@ export class ChatService {
   }
 
   private async run(input: TurnInput, out: Channel<TurnEvent>) {
-    const { store, clock, models, search, recall, ledger, log } = this.deps;
+    const { store, clock, models, tools, recall, ledger, log } = this.deps;
     const message = input.message.trim().slice(0, 8000);
     if (!message) throw new Error("Say something first.");
 
@@ -89,7 +88,7 @@ export class ChatService {
     const activity: Activity[] = [...memory.activity];
     if (activity.length) out.push({ type: "activity", activity: [...activity] });
 
-    const tool = new WebSearchTool(search, this.cache, (event, sources) => {
+    const tool = new CitedSearch(tools, (event, sources) => {
       const at = activity.findIndex((a) => a.kind === "search" && event.kind === "search" && a.id === event.id);
       if (at >= 0) activity[at] = event;
       else activity.push(event);

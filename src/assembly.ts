@@ -8,6 +8,7 @@
 import { anthropicModels } from "./agents/models/anthropic.ts";
 import { bedrockClient, bedrockModels, SONNET_4_5 } from "./agents/models/bedrock.ts";
 import type { ChatModel } from "./agents/ports.ts";
+import { McpToolSurface } from "./agents/mcp-tools.ts";
 import { AbsentClaimExtractor, AnthropicClaimExtractor } from "./adapters/claims/anthropic.ts";
 import { BedrockClaimExtractor } from "./adapters/claims/bedrock.ts";
 import type { ClaimExtractor } from "./ports/claims.ts";
@@ -21,6 +22,7 @@ import { ModelCatalog } from "./services/catalog.ts";
 import { ChatService } from "./services/chat.ts";
 import { LedgerService } from "./services/ledger.ts";
 import { RecallService } from "./services/recall.ts";
+import { SearchService } from "./services/web-search.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -37,6 +39,10 @@ export interface Settings {
   defaultModel?: string;
   effort: Effort;
   now?: string;
+  /** Where the runtime finds its tools. Default: this server's own /mcp. */
+  mcpEndpoint?: string;
+  /** Serve /mcp to other machines too, for a runtime deployed elsewhere. Default: loopback only. */
+  mcpAllowRemote: boolean;
 }
 
 export function settingsFromEnv(env = process.env): Settings {
@@ -66,6 +72,8 @@ export function settingsFromEnv(env = process.env): Settings {
     defaultModel: blank(env.DEFAULT_MODEL),
     effort: (blank(env.EFFORT) as Effort) ?? "low",
     now: blank(env.AGENT_NOW),
+    mcpEndpoint: blank(env.MCP_ENDPOINT),
+    mcpAllowRemote: env.MCP_ALLOW_REMOTE === "true",
   };
 }
 
@@ -83,12 +91,15 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   }
   const catalog = new ModelCatalog(models, settings.defaultModel);
 
-  const search = chooseSearch(settings);
+  const search = new SearchService(chooseSearch(settings));
+  // The runtime reaches search the way it would reach any tool server: over MCP. By default that
+  // server is this process, at /mcp; MCP_ENDPOINT points it somewhere else without a code change.
+  const tools = new McpToolSurface(new URL(settings.mcpEndpoint ?? `http://127.0.0.1:${settings.port}/mcp`));
   const store = new SqliteMemory(settings.dataFile);
   const clock = settings.now ? new ShiftedClock(new Date(settings.now)) : new SystemClock();
   const recall = new RecallService(store);
   const ledger = new LedgerService(store, extractor);
-  const chat = new ChatService({ store, clock, models: catalog, search, recall, ledger, log });
+  const chat = new ChatService({ store, clock, models: catalog, tools, recall, ledger, log });
 
   return { settings, catalog, search, store, clock, chat };
 }

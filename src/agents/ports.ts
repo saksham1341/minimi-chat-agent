@@ -46,6 +46,7 @@ export interface ModelInfo {
 }
 
 export interface ToolSurface {
-  offered(): ToolSpec[];
+  /** What it offers. May ask a remote server, so it may be a promise. */
+  offered(): ToolSpec[] | Promise<ToolSpec[]>;
   run(call: ToolCall, signal?: AbortSignal): Promise<ToolResult>;
 }

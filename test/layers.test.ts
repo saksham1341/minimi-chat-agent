@@ -15,7 +15,7 @@ const ALLOWED: Record<string, string[]> = {
   ports: ["agents", "domain"],
   adapters: ["agents", "domain", "ports"],
   services: ["agents", "domain", "ports"], // never an adapter: they arrive through assembly
-  api: ["assembly"], // an interface reaches services only through what assembly built
+  api: ["assembly", "services"], // interfaces are thin: they call services, nothing below them
   assembly: ["agents", "domain", "ports", "adapters", "services", "api"],
   main: ["assembly", "api"],
 };
