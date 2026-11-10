@@ -7,10 +7,11 @@ The README says what this is and why. This is how it fits together: the layers, 
 ```
 src/
   agents/      the runtime: loop, models, credentials, MCP client, inbox. Imports nothing of the app.
-  domain/      types and rules with right answers: calendar phrases, quotes, edits, answer shapes.
+  domain/      types and rules with right answers: calendar phrases, quotes, citations, topic marks, answer shapes.
   ports/       what services need from the outside: memory store, search provider, runtime, clock.
   adapters/    those needs met: SQLite, Exa/Tavily, embedded or remote runtime, system clock.
-  services/    the operations: chat (one turn), recall, re-check, ledger, sources, web search.
+  services/    the operations: chat (one turn), recall, re-check, citer, indexer, ledger, sources, web search,
+               and a search planner (built, off by default).
   api/         thin interfaces: HTTP for the web app, MCP for any agent.
   assembly.ts  the one place adapters are chosen and wired.
 web/src/       React client. Types are imported from the server, type-only, so the two cannot drift.
@@ -38,9 +39,11 @@ The backend's MCP endpoint (`/mcp`, stateless, loopback-only by default) serves 
    - the history is the conversation as later turns replay it;
    - the ask carries the context blocks;
    - the endings are the answer shapes, sent as plain JSON schemas.
-4. **Observation.** The run streams deltas and entries. The chat service reads them for the screen (search lanes, notes, sources) and keeps each page's text as a snapshot.
+4. **Observation.** The run streams deltas and entries. The chat service reads them for the screen (search lanes, notes, sources), keeps each result's passages as a snapshot, and hands each finished paragraph of the answer to a citation run (see Citations).
 5. **Checks** when the run ends. Answer shapes are validated, and replies that talk about "the context" are caught; either continues the run once (`MAX_CORRECTIONS = 1`). Citations never do: they are found by a second run while the answer is written, and checked by lookup (see Citations).
-6. **Record.** The turn is saved as the person saw it. The transcript gets the question and the settled answer only (see Replay). The person has the answer now. Then, in the background, the indexer writes the index card and the ledger stores it with the facts.
+6. **Record.** The turn is saved and `done` is sent the moment the text ends. The transcript gets the question and the answer only (see Replay). Then, without the person waiting: the last citations land and the saved turn takes them; the ledger saves a default card from the answer's topic marks; and the indexer writes the full card, which replaces it.
+
+**Models.** Sonnet 4.5 writes answers. The work around an answer (finding citations, writing index cards, planning searches when enabled) goes to a light model: `FAST_MODEL`, else any Haiku the runtime offers (`ModelCatalog.light`). All of it goes through the same runtime and the same loop; only the instruction, the endings and the model differ.
 
 The screen gets a vocabulary of its own (`TurnEvent`), not the provider's:
 - `start`, `activity`, `sources`;
@@ -61,7 +64,7 @@ The screen gets a vocabulary of its own (`TurnEvent`), not the provider's:
 Also in the loop:
 
 - **Leaked calls.** A tool call written out as XML text is caught, retracted from the screen, and the model is asked to make the call.
-- **The inbox** (`agents/inbox.ts`). Messages said to a run while it works wait there. The loop drains all of them at once at the one seam where a message can join without landing inside an exchange the model is still owed: after a round's tool results, before the next request. Each one streams `dequeued` and enters the conversation as the person's message. Whatever is still waiting when the run ends was never heard, and the client sends it as the next question.
+- **The inbox** (`agents/inbox.ts`). Messages said to a run while it works wait there. The loop drains all of them at once at the one seam where a message can join without landing inside an exchange the model is still owed: after a round's tool results, before the next request. Each one streams `dequeued` and enters the conversation as the person's message. Whatever is still waiting when the run ends was never heard, and the client sends it as the next question. Two of Keel's rules matter here: a run that ends in an answer shape ends there, and a finished run takes no messages, which is why citation work is a run per paragraph rather than one run fed in parts. Keel also takes up the inbox when the model stops in prose, and carries on if anything arrived; this port does not yet, because one turn would then hold two answers.
 
 ## Memory
 
@@ -157,7 +160,9 @@ Actual time is spent on the model writing. Perceived time is designed:
 `npm test` runs in under a second and never calls a model or the network. Fakes stand in at the ports, and the remote runtime is exercised over real HTTP on localhost. Tests assert behaviour:
 - the brief's phrasings resolve to the right day and topic;
 - quotes are found, repaired or flagged;
-- edits change only what they name;
+- citations attach where their claim ends, replacing the page tag, and each paragraph is cited in its own run on the passages it tags;
+- the answer is `done` before its citations land, and the saved turn takes them after;
+- topic marks give a default card at once, and the indexer's card replaces it;
 - inbox messages join at the seam;
 - replay keeps only the question and the answer;
 - imports point one way.
@@ -165,6 +170,7 @@ Actual time is spent on the model writing. Perceived time is designed:
 ## Deliberately left out
 
 - **Embeddings**, because the card's aliases carry the meaning and exact matching can be explained and tested.
-- **A recall tool or a router model**, because each one is a model round to wait for. (Indexing is a model call, but after the answer.)
+- **A recall tool or a router model**, because each one is a model round to wait for. (Indexing and citing are model calls, but nobody waits for them.)
+- **Search planning by default**: built, but on Bedrock a Haiku plan took as long as Sonnet's own first round (see Speed).
 - **Provider-native citations**, because they only work with Claude.
 - **Sign-in and per-person memory**: one person per deployment for now.
