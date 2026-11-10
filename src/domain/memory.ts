@@ -7,9 +7,11 @@ export interface Conversation {
   updatedAt: string;
 }
 
-/** A search result the answer may cite, numbered per turn: S1, S2, ... */
+/** A page an answer may cite: a stable id the model cites by, and a number people see. */
 export interface Source {
   id: string;
+  /** Its number in the conversation, in the order pages were first found. Absent on older records. */
+  n?: number;
   url: string;
   title: string;
   domain: string;

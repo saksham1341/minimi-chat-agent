@@ -11,6 +11,7 @@
     "start": "vite build --logLevel warn && node --disable-warning=ExperimentalWarning --import tsx src/main.ts",
     "dev": "node --disable-warning=ExperimentalWarning --watch --import tsx src/main.ts",
     "dev:web": "vite",
+    "agents": "node --disable-warning=ExperimentalWarning --import tsx src/agents/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

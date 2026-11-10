@@ -18,7 +18,6 @@ import { ModelCatalog } from "../src/services/catalog.ts";
 import { ChatService, type TurnEvent } from "../src/services/chat.ts";
 import { LedgerService } from "../src/services/ledger.ts";
 import { RecallService } from "../src/services/recall.ts";
-import { RunRegistry } from "../src/services/runs.ts";
 import { SearchService } from "../src/services/web-search.ts";
 
 const model = (reply: string): ChatModel => ({
@@ -47,7 +46,7 @@ describe("the runtime as its own deployment", () => {
 describe("checking a run and continuing it", () => {
   it("sends an answer whose citations do not hold up back once, and keeps the corrected one", async () => {
     const requests: RunRequest[] = [];
-    const replies = ['Neon costs $19 [S9 "Launch $19"].', "Neon's Launch plan costs $19 a month."];
+    const replies = ['Neon costs $19 [S9abcd "Launch $19"].', "Neon's Launch plan costs $19 a month."];
     const runtime: AgentRuntimePort = {
       models: async () => ({ models: [{ id: "fake:model", provider: "fake", label: "Fake", hint: "" }], defaultModel: "fake:model" }),
       async *run(request) {
@@ -64,7 +63,6 @@ describe("checking a run and continuing it", () => {
       models: new ModelCatalog(runtime),
       runtime,
       search: new SearchService({ name: "fake", available: true, search: async () => [] }),
-      runs: new RunRegistry(),
       recall: new RecallService(store),
       ledger: new LedgerService(store, new AbsentClaimExtractor()),
       log: () => {},
@@ -74,7 +72,7 @@ describe("checking a run and continuing it", () => {
     const done = events.find((e) => e.type === "done");
     expect(requests).toHaveLength(2);
     expect(requests[1].ask).toMatchObject({ by: "runtime" });
-    expect(requests[1].ask.text).toMatch(/S9 is not one of this answer's search results/);
+    expect(requests[1].ask.text).toMatch(/S9abcd is not one of this answer's search results/);
     expect(done?.type === "done" && done.turn.lead).toBe("Neon's Launch plan costs $19 a month.");
     // The record keeps the whole exchange, correction included, as a valid conversation.
     const transcript = store.transcript(done?.type === "done" ? done.turn.conversationId : "");

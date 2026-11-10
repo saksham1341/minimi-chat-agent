@@ -19,7 +19,6 @@ export interface PlannedRead {
   domains?: string[];
   fresh?: true;
   since?: string;
-  max_results: number;
 }
 
 const PRICE = /\$|€|£|₹|\bpric|\bplan\b|\bplans\b|\btier|\bseat|\/mo|per month|free/i;
@@ -38,9 +37,9 @@ export function planReadAhead(claims: Claim[]): PlannedRead[] {
     // The vendor's own site, if an earlier source was on it; otherwise a live search for its page.
     const own = facts.map((f) => siteOf(f.sourceUrl)).find((site) => site && isVendorSite(vendor, site));
     const page: PlannedRead = {
-      vendor, kind: "page", query: aboutPrice ? `${vendor} pricing plans` : vendor, fresh: true, max_results: 3, ...(own ? { domains: [own] } : {}),
+      vendor, kind: "page", query: aboutPrice ? `${vendor} pricing plans` : vendor, fresh: true, ...(own ? { domains: [own] } : {}),
     };
-    const news: PlannedRead[] = baseline ? [{ vendor, kind: "news", query: `${vendor} new features announcement launch`, since: baseline, max_results: 3 }] : [];
+    const news: PlannedRead[] = baseline ? [{ vendor, kind: "news", query: `${vendor} new features announcement launch`, since: baseline }] : [];
     return [page, ...news];
   });
 }

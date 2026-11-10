@@ -48,7 +48,7 @@ export function serve(app: App, staticDir: string) {
         // The tool server is for the runtime, which by default is this same process.
         const from = req.socket.remoteAddress?.replace("::ffff:", "");
         if (!app.settings.mcpAllowRemote && !isLoopback(from) && from !== app.settings.host) return json(res, { error: "forbidden" }, 403);
-        return handleMcp(app.search, app.runs, req, res);
+        return handleMcp(app.search, req, res);
       }
       if (path.startsWith("/api/")) return json(res, { error: "not found" }, 404);
       return file(req, res, staticDir, path);

@@ -19,6 +19,8 @@ export interface ToolResult {
   content: string;
   /** A tool that failed still answers. The model asked and is owed a reply. */
   failed: boolean;
+  /** The tool's structured result, when it gives one: passed through untouched, for the caller. */
+  data?: unknown;
 }
 
 /** A person (or the runtime correcting the model) said something. */

@@ -17,8 +17,8 @@ export interface Citation {
   verified?: boolean;
 }
 
-/** `[S3]`, `[S3 "quote"]`, `[S3 !"quote"]` (marked unverified), and lists like `[S1, S3]`. */
-const MARKER = /\[(S\d+)(?:\s+(!?)"((?:[^"\\]|\\.)*)")?((?:\s*,\s*S\d+)*)\]/g;
+/** `[S3f2a1]`, `[S3f2a1 "quote"]`, `[S3f2a1 !"quote"]` (marked unverified), and lists. Older ids (`S3`) too. */
+const MARKER = /\[(S\d[0-9a-f]*)(?:\s+(!?)"((?:[^"\\]|\\.)*)")?((?:\s*,\s*S\d[0-9a-f]*)*)\]/g;
 
 export function citationsIn(text: string): Citation[] {
   const found: Citation[] = [];
@@ -85,7 +85,7 @@ export function bareCitations(text: string): QuoteProblem[] {
 /** `[S1 "100" and "10"]` and the like: brackets that name a source but are not a citation. */
 export function malformedCitations(text: string): QuoteProblem[] {
   const valid = new Set([...text.matchAll(MARKER)].map((m) => m.index));
-  return [...text.matchAll(/\[(S\d+)\b[^\]\n]*\]/g)]
+  return [...text.matchAll(/\[(S\d[0-9a-f]*)\b[^\]\n]*\]/g)]
     .filter((m) => !valid.has(m.index))
     .map((m) => ({ id: m[1], quote: m[0], reason: "malformed" as const }));
 }

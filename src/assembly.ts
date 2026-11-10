@@ -8,7 +8,7 @@
  * deployment (`APP_AGENTS=remote`, `npm run agents`). The application never holds a model key.
  */
 import { runtimeFromEnv } from "./agents/config.ts";
-import { AbsentClaimExtractor, RuntimeClaimExtractor } from "./adapters/claims/runtime.ts";
+import { RuntimeClaimExtractor } from "./adapters/claims/runtime.ts";
 import { ShiftedClock, SystemClock } from "./adapters/clock.ts";
 import { EmbeddedRuntime } from "./adapters/runtime/embedded.ts";
 import { RemoteRuntime } from "./adapters/runtime/remote.ts";
@@ -22,7 +22,6 @@ import { ModelCatalog } from "./services/catalog.ts";
 import { ChatService } from "./services/chat.ts";
 import { LedgerService } from "./services/ledger.ts";
 import { RecallService } from "./services/recall.ts";
-import { RunRegistry } from "./services/runs.ts";
 import { SearchService } from "./services/web-search.ts";
 
 export interface Settings {
@@ -66,7 +65,6 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   const search = new SearchService(chooseSearch(settings));
   const store = new SqliteMemory(settings.dataFile);
   const clock = settings.now ? new ShiftedClock(new Date(settings.now)) : new SystemClock();
-  const runs = new RunRegistry();
 
   // The runtime reaches this application's tools over MCP, at /mcp on this server.
   const self = settings.host === "0.0.0.0" || settings.host === "::" ? "127.0.0.1" : settings.host;
@@ -78,11 +76,11 @@ export function assemble(settings: Settings, log: (message: string) => void = co
 
   const catalog = new ModelCatalog(runtime);
   const recall = new RecallService(store);
-  const extractor = runtime ? new RuntimeClaimExtractor(runtime, () => catalog.light()) : new AbsentClaimExtractor();
+  const extractor = new RuntimeClaimExtractor(runtime, () => catalog.light());
   const ledger = new LedgerService(store, extractor);
-  const chat = new ChatService({ store, clock, models: catalog, runtime, search, runs, recall, ledger, log });
+  const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, log });
 
-  return { settings, catalog, search, runs, store, clock, chat, recall };
+  return { settings, catalog, search, store, clock, chat, recall };
 }
 
 export type App = ReturnType<typeof assemble>;

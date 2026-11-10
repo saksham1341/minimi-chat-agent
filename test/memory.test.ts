@@ -2,15 +2,15 @@ import { describe, expect, it } from "vitest";
 import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { TurnRecord } from "../src/domain/memory.ts";
 import { RecallService } from "../src/services/recall.ts";
-import { CitedSearch, SEARCH_TOOL, SearchService } from "../src/services/web-search.ts";
+import { SEARCH_TOOL, SearchService, sourceId } from "../src/services/web-search.ts";
+import { SourceBook } from "../src/services/sources.ts";
 import { McpToolSurface } from "../src/agents/mcp.ts";
-import { RunRegistry } from "../src/services/runs.ts";
 import { handleMcp } from "../src/api/mcp.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { evidenceProblem } from "../src/domain/answers.ts";
 import { isVendorSite, planReadAhead } from "../src/domain/recheck.ts";
-import { ReadAhead } from "../src/services/read-ahead.ts";
+import { readAhead } from "../src/services/read-ahead.ts";
 import type { SearchProvider } from "../src/ports/search.ts";
 
 const IST = "Asia/Kolkata";
@@ -79,80 +79,71 @@ describe("recall", () => {
 });
 
 describe("web search", () => {
-  const hits = (urls: string[]) => urls.map((url) => ({ title: url, url, excerpt: "…" }));
+  const hits = (urls: string[]) => urls.map((url) => ({ title: url, url, excerpt: `text of ${url}` }));
   const provider = (search: SearchProvider["search"]): SearchProvider => ({ name: "fake", available: true, search });
 
-  it("numbers sources once per page across searches in a run", async () => {
+  it("gives a page the same id in every search, for every caller", async () => {
     const service = new SearchService(provider(async (q) => hits(q.query === "a" ? ["https://x.com/1", "https://y.com/2"] : ["https://y.com/2", "https://z.com/3"])));
-    const cited = new CitedSearch(service);
-    const first = await cited.answer({ query: "a" });
-    const second = await cited.answer({ query: "b" });
-    expect(cited.sources.map((s) => s.id)).toEqual(["S1", "S2", "S3"]);
-    expect(first.text).toContain("[S2]");
-    expect(second.text).toContain("[S2]");
-    expect(second.text).toContain("[S3]");
+    const a = await service.search({ query: "a" });
+    const b = await service.search({ query: "b" });
+    expect(a.results[1].id).toBe(b.results[0].id);
+    expect(a.results[0].id).toMatch(/^S\d[0-9a-f]{4}$/);
+    expect(new Set([...a.results, ...b.results].map((r) => r.id)).size).toBe(3);
   });
 
-  it("asks the provider once for a repeated query", async () => {
+  it("asks the provider once for a repeated query, even while the first is still in flight", async () => {
     let calls = 0;
-    const service = new SearchService(provider(async () => (calls++, hits(["https://x.com"]))));
-    await service.search({ query: "same" });
-    await service.search({ query: "same" });
+    const service = new SearchService(provider(async () => (calls++, await new Promise((r) => setTimeout(r, 20)), hits(["https://x.com"]))));
+    const [first, second] = await Promise.all([service.search({ query: "same" }), service.search({ query: "same" })]);
     expect(calls).toBe(1);
+    expect([first.cached, second.cached]).toEqual([false, true]);
+  });
+});
+
+describe("the conversation's sources", () => {
+  const result = (url: string) => ({ id: sourceId(url), title: url, url, domain: "x.com", text: `text of ${url}` });
+
+  it("numbers pages for people in the order they were found, and keeps what each said", () => {
+    const book = new SourceBook();
+    book.enter([result("https://x.com/1"), result("https://x.com/2")], {});
+    book.enter([result("https://x.com/2"), result("https://x.com/3")], { fresh: true });
+    expect(book.sources.map((s) => s.n)).toEqual([1, 2, 3]);
+    expect(book.snapshots.get(sourceId("https://x.com/3"))).toBe("text of https://x.com/3");
+    expect(book.sources[1].live).toBe(true);
   });
 
-  it("reports a failing provider as a failed answer and a failed activity", async () => {
-    const service = new SearchService(provider(async () => { throw new Error("429"); }));
-    const seen: string[] = [];
-    const result = await new CitedSearch(service, (a) => { if (a.kind === "search" && a.failed) seen.push(a.failed); }).answer({ query: "q" });
-    expect(result.failed).toBe(true);
-    expect(seen).toEqual(["429"]);
+  it("carries earlier turns' sources, so a follow-up can cite them", () => {
+    const first = new SourceBook();
+    first.enter([result("https://x.com/1")], {});
+    const next = new SourceBook({ sources: first.sources, snapshots: first.snapshots });
+    next.enter([result("https://x.com/9")], {});
+    expect(next.sources.map((s) => s.n)).toEqual([1, 2]);
+    expect(next.sourcesFor(`as said before [${sourceId("https://x.com/1")} "text"]`).map((s) => s.n)).toEqual([1, 2]);
   });
 });
 
 describe("the MCP boundary", () => {
-  const serve = async (service: SearchService, runs: RunRegistry) => {
-    const server = createServer((req, res) => void handleMcp(service, runs, req, res));
+  it("serves the same stateless search to any client, as text and as data", async () => {
+    let calls = 0;
+    const service = new SearchService({ name: "fake", available: true, search: async (q) => (calls++, [{ title: `${q.query} page`, url: "https://neon.com/pricing", excerpt: "Launch $19" }]) });
+    const server = createServer((req, res) => void handleMcp(service, req, res));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    return { server, url: new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`) };
-  };
-  const fake = (): SearchProvider => ({ name: "fake", available: true, search: async (q) => [{ title: `${q.query} page`, url: `https://example.com/${encodeURIComponent(q.query)}`, excerpt: "text" }] });
-
-  it("keeps each run's searches apart, by the run id the runtime sends", async () => {
-    const service = new SearchService(fake());
-    const runs = new RunRegistry();
-    const a = new CitedSearch(service);
-    const b = new CitedSearch(service);
-    runs.open("run-a", a);
-    runs.open("run-b", b);
-    const { server, url } = await serve(service, runs);
     try {
-      const clientA = new McpToolSurface(url, { "x-run-id": "run-a" });
-      const clientB = new McpToolSurface(url, { "x-run-id": "run-b" });
-      expect((await clientA.offered()).map((t) => t.name)).toEqual([SEARCH_TOOL.name]);
-      await clientA.run({ id: "1", name: "web_search", arguments: { query: "one" } });
-      await clientA.run({ id: "2", name: "web_search", arguments: { query: "two" } });
-      const fromB = await clientB.run({ id: "3", name: "web_search", arguments: { query: "three" } });
-      expect(a.sources.map((s) => s.id)).toEqual(["S1", "S2"]);
-      expect(b.sources.map((s) => s.id)).toEqual(["S1"]);
-      expect(fromB.content).toContain("[S1] three page");
-      await clientA.close();
-      await clientB.close();
-    } finally {
-      server.close();
-    }
-  });
-
-  it("serves any other MCP client too, numbered for its own call", async () => {
-    const service = new SearchService(fake());
-    const { server, url } = await serve(service, new RunRegistry());
-    try {
-      const outsider = new McpToolSurface(url);
-      const result = await outsider.run({ id: "1", name: "web_search", arguments: { query: "neon pricing" } });
-      expect(result.content).toContain("[S1] neon pricing page");
-      const refused = await outsider.run({ id: "2", name: "web_search", arguments: { query: "x", since: "last week" } });
+      const url = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`);
+      const runtimeClient = new McpToolSurface(url);
+      const otherClient = new McpToolSurface(url);
+      expect((await runtimeClient.offered()).map((t) => t.name)).toEqual([SEARCH_TOOL.name]);
+      const one = await runtimeClient.run({ id: "1", name: "web_search", arguments: { query: "neon pricing" } });
+      const two = await otherClient.run({ id: "2", name: "web_search", arguments: { query: "neon pricing" } });
+      const id = sourceId("https://neon.com/pricing");
+      expect(one.content).toContain(`[${id}] neon pricing page`);
+      expect(one.data).toMatchObject({ results: [{ id, url: "https://neon.com/pricing" }], cached: false });
+      expect(two.data).toMatchObject({ results: [{ id }], cached: true });
+      expect(calls).toBe(1);
+      const refused = await otherClient.run({ id: "3", name: "web_search", arguments: { query: "x", since: "last week" } });
       expect(refused.failed).toBe(true);
-      await outsider.close();
+      await runtimeClient.close();
+      await otherClient.close();
     } finally {
       server.close();
     }
@@ -214,15 +205,13 @@ describe("reading ahead from the ledger", () => {
     expect(isVendorSite("Zoho CRM", "capterra.com")).toBe(false);
   });
 
-  it("hands a read already under way to the search that asks for it, once it names the vendor", async () => {
+  it("starts the planned searches and offers them; only the exact search is answered from them", async () => {
     let calls = 0;
     const service = new SearchService({ name: "fake", available: true, search: async () => (calls++, []) });
-    const ahead = new ReadAhead(service, () => {});
-    ahead.start([{ vendor: "Pipedrive", kind: "page", query: "Pipedrive pricing plans", fresh: true, max_results: 3 }]);
-    expect(ahead.take({ query: "pipedrive pricing 2026", fresh: true })).toBeDefined();
-    expect(ahead.take({ query: "hubspot pricing", fresh: true })).toBeUndefined();
-    expect(ahead.take({ query: "pipedrive", since: "2026-11-09" })).toBeUndefined();
-    await ahead.take({ query: "pipedrive pricing", fresh: true });
-    expect(calls).toBe(1);
+    const note = readAhead(service, [{ vendor: "Pipedrive", kind: "page", query: "Pipedrive pricing plans", fresh: true }], () => {});
+    expect(note).toContain('{"query":"Pipedrive pricing plans","fresh":true}');
+    expect((await service.search({ query: "Pipedrive pricing plans", fresh: true })).cached).toBe(true);
+    expect((await service.search({ query: "pipedrive pricing 2026", fresh: true })).cached).toBe(false);
+    expect(calls).toBe(2);
   });
 });

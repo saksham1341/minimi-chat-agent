@@ -46,7 +46,13 @@ export class McpToolSurface implements ToolSurface {
       .filter((block) => block.type === "text")
       .map((block) => block.text ?? "")
       .join("\n");
-    return { callId: call.id, name: call.name, content: text, failed: result.isError === true };
+    return {
+      callId: call.id,
+      name: call.name,
+      content: text,
+      failed: result.isError === true,
+      ...(result.structuredContent !== undefined ? { data: result.structuredContent } : {}),
+    };
   }
 
   /** One connection, opened on first use and reopened if it failed. */

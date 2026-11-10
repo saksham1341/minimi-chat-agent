@@ -13,7 +13,7 @@ import { McpToolSurface } from "./mcp.ts";
 import type { ChatModel, ModelInfo, ToolSurface } from "./ports.ts";
 
 export interface RunRequest {
-  /** Sent to the tool server with every call, so it can keep this run's state (citations, say). */
+  /** For the caller's own bookkeeping and logs; the runtime keeps nothing by it. */
   runId: string;
   model?: string;
   instruction: string;
@@ -59,7 +59,7 @@ export class AgentRuntime {
       yield { type: "error", message: "No model is configured on the agent runtime." };
       return;
     }
-    const tools = request.tools === false || !this.toolServer ? undefined : new McpToolSurface(this.toolServer, { "x-run-id": request.runId });
+    const tools = request.tools === false || !this.toolServer ? undefined : new McpToolSurface(this.toolServer);
     try {
       yield* stream(model, tools ?? NO_TOOLS, {
         instruction: request.instruction,

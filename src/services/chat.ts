@@ -29,10 +29,10 @@ import type { AgentRuntimePort } from "../ports/runtime.ts";
 import type { ModelCatalog } from "./catalog.ts";
 import { INSTRUCTION } from "./instruction.ts";
 import type { LedgerService } from "./ledger.ts";
-import { ReadAhead } from "./read-ahead.ts";
+import { readAhead } from "./read-ahead.ts";
 import type { RecallService } from "./recall.ts";
-import type { RunRegistry } from "./runs.ts";
-import { CitedSearch, SEARCH_TOOL, type SearchService } from "./web-search.ts";
+import { SourceBook } from "./sources.ts";
+import { SEARCH_TOOL, type SearchInput, type SearchResult, type SearchService } from "./web-search.ts";
 
 export type TurnEvent =
   | { type: "start"; conversation: Conversation; turnId: string; at: string; model: ModelInfo }
@@ -66,7 +66,6 @@ export class ChatService {
       models: ModelCatalog;
       runtime: AgentRuntimePort;
       search: SearchService;
-      runs: RunRegistry;
       recall: RecallService;
       ledger: LedgerService;
       log: (message: string) => void;
@@ -86,7 +85,7 @@ export class ChatService {
   }
 
   private async run(input: TurnInput, out: Channel<TurnEvent>) {
-    const { store, clock, models, runtime, search, runs, recall, ledger, log } = this.deps;
+    const { store, clock, models, runtime, search, recall, ledger, log } = this.deps;
     const message = input.message.trim().slice(0, 8000);
     if (!message) throw new Error("Say something first.");
 
@@ -109,31 +108,21 @@ export class ChatService {
       out.push({ type: "activity", activity: [...activity] });
     };
 
-    // Reads a re-check would need start now, in the background, beside the model's first request.
-    // The model decides whether to use them.
-    const readAhead = memory.readAhead.length ? new ReadAhead(search, upsert) : undefined;
-    readAhead?.start(planReadAhead(memory.readAhead), input.signal);
+    // The conversation's sources, built from what the run reports. Earlier turns' carry over, so a
+    // follow-up can cite an earlier answer's pages and have its quotes checked.
+    const book = new SourceBook({ sources: store.turns(conversation.id).flatMap((t) => t.sources), snapshots: store.snapshotsFor(conversation.id) });
+    if (book.sources.length) out.push({ type: "sources", sources: [...book.sources] });
 
-    // This run's searches, kept here and found by the run's id when the runtime calls over MCP.
-    // Sources carry across the conversation, so a follow-up can cite an earlier answer's pages.
-    const prior = { sources: store.turns(conversation.id).flatMap((t) => t.sources), snapshots: store.snapshotsFor(conversation.id) };
-    const cited = new CitedSearch(
-      search,
-      (event, sources) => {
-        upsert(event);
-        out.push({ type: "sources", sources: [...sources] });
-      },
-      { readAhead, prior },
-    );
-    if (prior.sources.length) out.push({ type: "sources", sources: [...cited.sources] });
+    // Searches a re-check would need start now, in the background; the model is told which.
+    const prepared = readAhead(search, planReadAhead(memory.readAhead), upsert);
     const runId = randomUUID();
-    runs.open(runId, cited);
+    const searches = new Map<string, SearchInput>();
 
-    const shapes = answerShapes(() => cited.sources);
+    const shapes = answerShapes(() => book.sources);
     // Sent as data: the checks stay here, where the sources and snapshots are.
     const endings: OutputShape[] = shapes.map(({ name, description, schema }) => ({ name, description, schema }));
     const transcript = store.transcript(conversation.id);
-    const ask = asked(message, memory.context);
+    const ask = asked(message, memory.context + prepared);
     const fresh: Entry[] = [];
 
     const record = (shape: string, text: string, answer?: unknown): TurnRecord => ({
@@ -143,10 +132,10 @@ export class ChatService {
       question: message,
       answerText: answerAsText(shape, text, answer),
       // What still does not hold up after a correction is shown marked, never silently.
-      lead: markUnverified((answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(), cited.snapshots),
+      lead: markUnverified((answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(), book.snapshots),
       shape,
       ...(answer === undefined ? {} : { answer }),
-      sources: cited.sourcesFor(text, JSON.stringify(answer ?? "")),
+      sources: book.sourcesFor(text, JSON.stringify(answer ?? "")),
       activity,
       model: model.id,
     });
@@ -189,6 +178,8 @@ export class ChatService {
             }
           } else if (event.type === "entry") {
             fresh.push(event.entry);
+            this.observe(event.entry, searches, book, upsert);
+            out.push({ type: "sources", sources: [...book.sources] });
             const t = Date.now();
             if (event.entry.kind === "said") (modelMs += t - mark), rounds++;
             if (event.entry.kind === "ran") toolMs += t - mark;
@@ -199,7 +190,7 @@ export class ChatService {
         }
         if (!ended) throw new Error("The agent runtime stopped without an answer.");
 
-        const problem = this.check(ended, shapes, cited);
+        const problem = this.check(ended, shapes, book);
         if (problem && corrections++ < MAX_CORRECTIONS) {
           // Continue the run with the correction: the model sees what it said and why it was sent back.
           history = [...transcript, ask, ...fresh];
@@ -210,17 +201,17 @@ export class ChatService {
           continue;
         }
 
-        const answer = ended.shape === "reply" ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, cited.snapshots, cited.sources);
+        const answer = ended.shape === "reply" ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
         const turn = record(ended.shape, ended.text, answer);
         store.append(conversation.id, [ask, ...fresh]);
         store.saveTurn(turn);
-        store.saveSnapshots(turn, cited.snapshots);
+        store.saveSnapshots(turn, book.snapshots);
         store.touch(conversation.id, clock.now());
         out.push({ type: "done", turn, cutShort: ended.cutShort });
         const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
         log(
-          `turn ${turn.id.slice(0, 8)} ${model.label}${readAhead ? " (read ahead)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
-            `${cited.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
+          `turn ${turn.id.slice(0, 8)} ${model.label}${prepared ? " (read ahead)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
+            `${book.sources.length} sources ${s(toolMs)} in tools, total ${s(Date.now() - started)}, ${turn.shape}`,
         );
         ledger.record(turn).then(
           (n) => n && log(`ledger: ${n} claim${n === 1 ? "" : "s"} recorded for turn ${turn.id}`),
@@ -237,8 +228,35 @@ export class ChatService {
       store.saveTurn(record("reply", text));
       store.touch(conversation.id, clock.now());
       if (!stopped) throw error;
-    } finally {
-      runs.close(runId);
+    }
+  }
+
+  /**
+   * What a run entry means for the screen and the sources: a search asked for opens a lane; its
+   * results come back through the runtime with the search service's structured data, and are
+   * entered in the conversation's sources.
+   */
+  private observe(entry: Entry, searches: Map<string, SearchInput>, book: SourceBook, upsert: (a: Activity) => void) {
+    if (entry.kind === "said") {
+      for (const call of entry.toolCalls) {
+        if (call.name !== SEARCH_TOOL.name) continue;
+        const args = call.arguments as SearchInput;
+        searches.set(call.id, args);
+        upsert({ kind: "search", id: call.id, query: String(args.query ?? ""), since: args.since, domains: args.domains, fresh: args.fresh });
+      }
+    } else if (entry.kind === "ran") {
+      for (const result of entry.results) {
+        const args = searches.get(result.callId);
+        if (!args) continue;
+        const lane: Activity = { kind: "search", id: result.callId, query: String(args.query ?? ""), since: args.since, domains: args.domains, fresh: args.fresh };
+        if (result.failed) {
+          upsert({ ...lane, failed: result.content.replace(/^Search failed:\s*/, "").slice(0, 200) });
+          continue;
+        }
+        const data = result.data as { results?: SearchResult[]; cached?: boolean } | undefined;
+        const ids = book.enter(data?.results ?? [], args);
+        upsert({ ...lane, results: ids.length, hits: ids, ...(data?.cached ? { reused: true } : {}) });
+      }
     }
   }
 
@@ -247,13 +265,13 @@ export class ChatService {
    * a shape's schema and evidence; a reply's citations (proportionate: a citation standing in for
    * the fact, a malformed one or an unknown source always; quote misses only beyond two).
    */
-  private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[], cited: CitedSearch): string | null {
+  private check(ended: { shape: string; text: string; answer?: unknown }, shapes: OutputShape[], book: SourceBook): string | null {
     if (ended.shape !== "reply") {
       const shape = shapes.find((s) => s.name === ended.shape);
       const result = shape?.parse?.(ended.answer);
       return result && !result.ok ? `Your answer_${ended.shape} call did not hold up: ${result.error}` : null;
     }
-    const misses = quoteProblems(citationsIn(ended.text), cited.snapshots);
+    const misses = quoteProblems(citationsIn(ended.text), book.snapshots);
     const structural = [...misses.filter((p) => p.reason === "unknown source"), ...malformedCitations(ended.text), ...bareCitations(ended.text)];
     const quoteMisses = misses.filter((p) => p.reason !== "unknown source");
     const problems = structural.length || quoteMisses.length > 2 ? [...structural, ...quoteMisses] : [];

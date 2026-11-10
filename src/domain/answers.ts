@@ -18,11 +18,11 @@ import { describeProblems, quoteProblems, type QuoteProblem } from "./quotes.ts"
 const sourceIds = z
   .array(
     z.union([
-      z.object({ id: z.string().describe("A search result id, e.g. S2."), quote: z.string().describe("The exact words from that result this rests on.") }),
+      z.object({ id: z.string().describe("A search result id, e.g. S3f2a1."), quote: z.string().describe("The exact words from that result this rests on.") }),
       z.string(),
     ]),
   )
-  .describe('The search results that back this, each with the exact words it rests on: [{"id": "S2", "quote": "…"}]. Empty only if it comes from memory.');
+  .describe('The search results that back this, each with the exact words it rests on: [{"id": "S3f2a1", "quote": "…"}]. Empty only if it comes from memory.');
 
 /** A card's source entry, either form. */
 export type SourceRef = string | { id: string; quote: string; verified?: boolean };

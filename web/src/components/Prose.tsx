@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import type { Source } from "../api.ts";
 
 /** `[S3]`, `[S3 "exact words"]`, `[S3 !"words not found in the source"]`, `[S1, S3]`. */
-const MARKER = /\[(S\d+)(?:\s+(!?)"((?:[^"\\]|\\.)*)")?((?:\s*,\s*S\d+)*)\]/g;
+const MARKER = /\[(S\d[0-9a-f]*)(?:\s+(!?)"((?:[^"\\]|\\.)*)")?((?:\s*,\s*S\d[0-9a-f]*)*)\]/g;
 
 interface Quote {
   quote?: string;
@@ -20,14 +20,14 @@ interface Quote {
  */
 const linkCitations = (text: string, quotes: Quote[]) =>
   text
-    .replace(/\[S\d+[^\]\n]*$/, "")
+    .replace(/\[S\d[0-9a-f]*[^\]\n]*$/, "")
     .replace(MARKER, (_m, id: string, bang: string, quote: string | undefined, rest: string) => {
       const i = quotes.push(quote === undefined ? {} : { quote: quote.replace(/\\(.)/g, "$1"), verified: bang !== "!" }) - 1;
       const more = (rest ?? "").split(",").map((x) => x.trim()).filter(Boolean);
       return [`[${id}](#cite-${id}-${i})`, ...more.map((x) => `[${x}](#cite-${x})`)].join("");
     })
     // Anything else that names a source in brackets still reads as a citation, never as raw text.
-    .replace(/\[(S\d+)\b[^\]\n]*\](?!\()/g, (_m, id: string) => `[${id}](#cite-${id})`);
+    .replace(/\[(S\d[0-9a-f]*)\b[^\]\n]*\](?!\()/g, (_m, id: string) => `[${id}](#cite-${id})`);
 
 export function Prose({ text, sources, className }: { text: string; sources: Source[]; className?: string }) {
   const quotes: Quote[] = [];
@@ -64,7 +64,8 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
   const open = useSyncExternalStore(preview.subscribe, () => preview.current?.key === key);
   const anchor = useRef<HTMLAnchorElement>(null);
   const pointer = useRef<string>("mouse");
-  if (!source) return <span className="cite cite-missing">{id.slice(1)}</span>;
+  if (!source) return <span className="cite cite-missing">?</span>;
+  const label = String(source.n ?? id.slice(1));
 
   const show = (mode: Mode) => anchor.current && preview.show({ key, source, quote, verified, rect: anchor.current.getBoundingClientRect(), mode });
   return (
@@ -75,7 +76,7 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
         href={source.url}
         target="_blank"
         rel="noreferrer noopener"
-        aria-label={`Source ${id.slice(1)}: ${source.title}, ${source.domain}`}
+        aria-label={`Source ${label}: ${source.title}, ${source.domain}`}
         aria-expanded={open}
         onPointerDown={(e) => (pointer.current = e.pointerType)}
         // Real phones always fire touch events for a finger; pointerType alone has proved unreliable.
@@ -96,7 +97,7 @@ export function Cite({ id, sources, quote, verified }: { id: string; sources: So
           }
         }}
       >
-        {id.slice(1)}
+        {label}
       </a>
       {open && preview.current && createPortal(<Preview {...preview.current} />, document.body)}
     </>
@@ -206,6 +207,6 @@ export function formatDay(day: string) {
 /** The ids an answer actually cites, in order of first use. */
 export function citedIds(...texts: string[]): string[] {
   const seen: string[] = [];
-  for (const text of texts) for (const m of text.matchAll(/S\d+/g)) if (!seen.includes(m[0])) seen.push(m[0]);
+  for (const text of texts) for (const m of text.matchAll(/S\d[0-9a-f]*/g)) if (!seen.includes(m[0])) seen.push(m[0]);
   return seen;
 }

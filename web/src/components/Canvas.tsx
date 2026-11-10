@@ -110,7 +110,7 @@ export function Canvas({ turn, onPick, canPick, onClose, sheet }: { turn: ViewTu
               {cited.map((s) => (
                 <li key={s.id}>
                   <a href={s.url} target="_blank" rel="noreferrer noopener">
-                    <span className="source-id">{s.id.slice(1)}</span>
+                    <span className="source-id">{s.n ?? s.id.slice(1)}</span>
                     <span className="source-domain">{s.domain}</span>
                     <span className="source-title">{s.title}</span>
                     {s.published && <span className="source-date">{formatDay(s.published)}</span>}
