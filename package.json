@@ -1,0 +1,37 @@
+{
+  "name": "minimi-chat-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A chat agent with one tool, web search, and a memory that knows what day it is.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "vite build --logLevel warn && node --disable-warning=ExperimentalWarning --import tsx src/app/main.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch --import tsx src/app/main.ts",
+    "dev:web": "vite",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "0.36.0",
+    "@anthropic-ai/sdk": "^1.7.0",
+    "@fontsource-variable/instrument-sans": "^5.3.0",
+    "@fontsource-variable/newsreader": "^5.3.0",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "partial-json": "^0.1.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.7",
+    "vitest": "^4.1.12",
+    "zod": "^4.6.7"
+  }
+}

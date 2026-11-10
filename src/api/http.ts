@@ -1,0 +1,111 @@
+/**
+ * The HTTP interface. Thin by rule: parse the request, call a service, write the response. A
+ * second interface (a CLI, an MCP server) would call the same services at the same width.
+ */
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, normalize } from "node:path";
+import type { App } from "../assembly.ts";
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml",
+  ".png": "image/png", ".ico": "image/x-icon", ".woff2": "font/woff2", ".json": "application/json",
+};
+
+export function serve(app: App, staticDir: string) {
+  return createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const path = url.pathname;
+      if (path === "/api/meta" && req.method === "GET") return json(res, meta(app));
+      if (path === "/api/conversations" && req.method === "GET") return json(res, app.store.conversations(100));
+      const one = path.match(/^\/api\/conversations\/([\w-]+)$/);
+      if (one && req.method === "GET") {
+        const conversation = app.store.conversation(one[1]);
+        if (!conversation) return json(res, { error: "not found" }, 404);
+        return json(res, { conversation, turns: app.store.turns(conversation.id) });
+      }
+      if (path === "/api/chat" && req.method === "POST") return chat(app, req, res);
+      if (path.startsWith("/api/")) return json(res, { error: "not found" }, 404);
+      return file(res, staticDir, path);
+    } catch (error) {
+      if (!res.headersSent) json(res, { error: (error as Error).message }, 500);
+      else res.end();
+    }
+  });
+}
+
+function meta(app: App) {
+  return {
+    models: app.catalog.list(),
+    defaultModel: app.catalog.defaultId ?? null,
+    search: { provider: app.search.name, available: app.search.available },
+    now: app.clock.now().toISOString(),
+    timeZone: app.settings.timeZone,
+  };
+}
+
+async function chat(app: App, req: IncomingMessage, res: ServerResponse) {
+  const body = JSON.parse((await readBody(req)) || "{}") as { conversationId?: string; message?: string; modelId?: string; timeZone?: string };
+  const controller = new AbortController();
+  let finished = false;
+  res.on("close", () => {
+    if (!finished) controller.abort();
+  });
+
+  res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive" });
+  res.flushHeaders();
+  const timeZone = validZone(body.timeZone) ?? app.settings.timeZone;
+  for await (const event of app.chat.turn({
+    conversationId: body.conversationId,
+    message: String(body.message ?? ""),
+    modelId: body.modelId,
+    timeZone,
+    signal: controller.signal,
+  })) {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  finished = true;
+  res.end();
+}
+
+function validZone(zone?: string) {
+  if (!zone) return undefined;
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: zone });
+    return zone;
+  } catch {
+    return undefined;
+  }
+}
+
+async function file(res: ServerResponse, root: string, path: string) {
+  const safe = normalize(path).replace(/^(\.\.[/\\])+/, "");
+  let target = join(root, safe);
+  const found = await stat(target).catch(() => null);
+  if (!found || found.isDirectory()) target = join(root, "index.html");
+  const content = await readFile(target).catch(() => null);
+  if (!content) {
+    res.writeHead(503, { "content-type": "text/plain" });
+    return res.end("The web app is not built. Run `npm start` (it builds first).");
+  }
+  res.writeHead(200, { "content-type": TYPES[extname(target)] ?? "application/octet-stream" });
+  res.end(content);
+}
+
+function json(res: ServerResponse, body: unknown, status = 200) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+function readBody(req: IncomingMessage, limit = 64_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => {
+      data += chunk;
+      if (data.length > limit) reject(new Error("Request too large"));
+    });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
