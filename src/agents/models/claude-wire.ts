@@ -88,6 +88,7 @@ export async function readTurn(stream: WireStream, provider: string, onDelta?: (
       onDelta({ type: "tool_start", id: event.content_block.id, name: event.content_block.name });
     } else if (event.type === "content_block_delta") {
       if (event.delta.type === "text_delta") onDelta({ type: "text", text: event.delta.text });
+      else if (event.delta.type === "thinking_delta") onDelta({ type: "thinking", text: event.delta.thinking });
       else if (event.delta.type === "input_json_delta") {
         const tool = tools.get(event.index);
         if (!tool) continue;

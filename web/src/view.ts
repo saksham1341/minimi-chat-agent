@@ -8,8 +8,15 @@ export interface ViewTurn {
   status: "streaming" | "done" | "error";
   /** Text of the round in progress, or the final answer. */
   text: string;
-  /** What the model said before it went to search: a working note, shown in the canvas, not as the answer. */
+  /** What the model said before it went to search: working notes, shown while it works, not as the answer. */
   notes: string[];
+  /** The model's reasoning so far, when the provider streams it. */
+  thinking: string;
+  /** Text being redone, kept on screen (dimmed) until the new text starts, so nothing vanishes. */
+  draft?: string;
+  revising?: string;
+  /** The answer's text is final: the working notes fold away. */
+  settled: boolean;
   activity: Activity[];
   sources: Source[];
   shape: string;
@@ -26,6 +33,8 @@ export const fromRecord = (t: TurnRecord): ViewTurn => ({
   status: "done",
   text: t.lead,
   notes: [],
+  thinking: "",
+  settled: true,
   activity: t.activity,
   sources: t.sources,
   shape: t.shape,
@@ -34,7 +43,7 @@ export const fromRecord = (t: TurnRecord): ViewTurn => ({
 });
 
 export function pending(id: string, question: string): ViewTurn {
-  return { id, question, at: new Date().toISOString(), status: "streaming", text: "", notes: [], activity: [], sources: [], shape: "reply" };
+  return { id, question, at: new Date().toISOString(), status: "streaming", text: "", notes: [], thinking: "", settled: false, activity: [], sources: [], shape: "reply" };
 }
 
 /** Folds one server event into the turn it belongs to. */
@@ -47,9 +56,15 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
     case "sources":
       return { ...turn, sources: event.sources };
     case "text":
-      return { ...turn, text: turn.text + event.text };
-    case "retract":
-      return { ...turn, text: "" };
+      return turn.draft !== undefined
+        ? { ...turn, draft: undefined, revising: undefined, text: event.text }
+        : { ...turn, text: turn.text + event.text };
+    case "thinking":
+      return { ...turn, thinking: (turn.thinking + event.text).slice(-4000) };
+    case "revise":
+      return { ...turn, draft: turn.text || turn.draft || "", revising: event.reason, text: "", settled: false };
+    case "settled":
+      return { ...turn, text: event.text, draft: undefined, revising: undefined, settled: true };
     case "searching":
       return turn.text.trim() ? { ...turn, notes: [...turn.notes, turn.text.trim()], text: "" } : turn;
     case "shape": {
@@ -58,7 +73,7 @@ export function apply(turn: ViewTurn, event: TurnEvent): ViewTurn {
     }
     case "done": {
       const t = event.turn;
-      return { ...turn, status: "done", text: t.lead, shape: t.shape, answer: t.answer, sources: t.sources, activity: t.activity, cutShort: event.cutShort };
+      return { ...turn, status: "done", settled: true, draft: undefined, revising: undefined, text: t.lead, shape: t.shape, answer: t.answer, sources: t.sources, activity: t.activity, cutShort: event.cutShort };
     }
     case "error":
       return { ...turn, status: "error", error: event.message };

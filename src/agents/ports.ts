@@ -20,6 +20,8 @@ export interface ToolSpec {
 /** What a model emits while it is still talking, for the UI. Turns are the unit of record. */
 export type ModelDelta =
   | { type: "text"; text: string }
+  /** The model's reasoning as it streams, when the provider shows it. Shown as working, never kept as the answer. */
+  | { type: "thinking"; text: string }
   | { type: "tool_start"; id: string; name: string }
   | { type: "tool_input"; id: string; name: string; partial: unknown };
 

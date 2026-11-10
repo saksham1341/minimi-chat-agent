@@ -122,3 +122,23 @@ describe("telling a vendor's own site", () => {
     expect(isVendorSite("Zoho CRM", "capterra.com")).toBe(false);
   });
 });
+
+describe("reading back a page an earlier answer cited", () => {
+  const archive = { keptPages: (ids: string[]) => ids.filter((id) => id === "S1abcd").map((id) => ({ id, url: "https://neon.com/pricing", text: "Launch $19/month", seenAt: "2026-11-03T05:00:00Z" })) };
+  const fresh = { name: "fake", available: true, search: async () => [], read: async (urls: string[]) => urls.map((url) => ({ url, title: "Neon pricing", text: "Launch $21/month" })) };
+
+  it("gives the page as it was kept, by its id", async () => {
+    const { results } = await new SearchService(fresh, archive).search({ pages: ["S1abcd"] });
+    expect(results).toMatchObject([{ id: "S1abcd", url: "https://neon.com/pricing", text: "Launch $19/month" }]);
+  });
+
+  it("re-reads it live when asked for fresh", async () => {
+    const { results } = await new SearchService(fresh, archive).search({ pages: ["S1abcd"], fresh: true });
+    expect(results[0].text).toBe("Launch $21/month");
+  });
+
+  it("refuses ids no earlier answer cited", async () => {
+    await expect(new SearchService(fresh, archive).search({ pages: ["S9ffff"] })).rejects.toThrow();
+  });
+});
+

@@ -12,7 +12,7 @@ import { formatResults, SEARCH_TOOL, type SearchService } from "../services/web-
 
 const RESULTS = z.object({
   cached: z.boolean(),
-  results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string(), domain: z.string(), published: z.string().optional(), text: z.string() })),
+  results: z.array(z.object({ id: z.string(), title: z.string(), url: z.string(), domain: z.string(), published: z.string().optional(), kept: z.string().optional(), text: z.string() })),
 });
 
 export async function handleMcp(search: SearchService, req: IncomingMessage, res: ServerResponse) {

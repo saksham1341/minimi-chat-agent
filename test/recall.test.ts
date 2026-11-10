@@ -11,7 +11,7 @@ import type { ExchangeCard, TurnRecord } from "../src/domain/memory.ts";
 import { matchForm, phrases } from "../src/domain/text.ts";
 import { dateIn, isoDay } from "../src/domain/time.ts";
 import { LedgerService } from "../src/services/ledger.ts";
-import { RecallService } from "../src/services/recall.ts";
+import { ago, RecallService } from "../src/services/recall.ts";
 
 const IST = "Asia/Kolkata";
 const TUESDAY = new Date("2026-11-10T08:30:00Z"); // Tue 10 Nov, 14:00 in India
@@ -168,5 +168,31 @@ describe("the ledger", () => {
     });
     const claims = store.claimsFor([turn.id]);
     expect(claims.map((x) => [x.origin, x.value, x.quote ?? null])).toEqual([["observed", "$15/month", "Launch $15/month"], ["observed", "$69/month", null]]);
+  });
+});
+
+describe("a busy day", () => {
+  const sameDay = (at: string, question: string, terms: string[]): Fixture => ({ at, question, answer: question, terms, facts: [{ subject: question, value: "$10/month", quote: "$10/month", url: `https://${terms[0].replace(/\W/g, "")}.com/pricing` }] });
+  const day = [
+    sameDay("2026-11-09T04:00:00Z", "Latest Node LTS?", ["node", "node lts"]),
+    sameDay("2026-11-09T05:00:00Z", "Managed Postgres hosts?", ["postgres hosting", "managed database"]),
+    sameDay("2026-11-09T06:00:00Z", "Best F1 driver this season?", ["formula 1", "f1 standings"]),
+  ];
+
+  it("lets the topic pick among the day's exchanges, and re-checks only those", () => {
+    const r = new RecallService(memoryWith(...day)).recall("Yesterday we compared postgres hosting. Has pricing changed?", "other", TUESDAY, IST);
+    expect(r.baseline.map((c) => c.subject)).toEqual(["Managed Postgres hosts?"]);
+    expect(r.context).not.toContain("Latest Node LTS?");
+  });
+
+  it("is not confident which one a bare day means when several were asked", () => {
+    const r = new RecallService(memoryWith(...day)).recall("Is what you told me yesterday still right?", "other", TUESDAY, IST);
+    expect(r.confidence).toBe("low");
+  });
+
+  it("states how long ago an exchange was", () => {
+    expect(ago("2026-11-10T08:28:00Z", TUESDAY)).toBe("2 minutes ago");
+    expect(ago("2026-11-09T08:30:00Z", TUESDAY)).toBe("24 hours ago");
+    expect(ago("2026-11-03T08:30:00Z", TUESDAY)).toBe("7 days ago");
   });
 });

@@ -412,7 +412,19 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
 .source-date { flex: none; margin-left: auto; color: var(--faint); font-size: 0.75rem; }
 
 .status-label { flex: none; }
-.status-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--serif); font-style: italic; color: var(--faint); }
+/* The model's working notes: live while it works, folded away when the answer is final. */
+.working { display: grid; grid-template-rows: 1fr; opacity: 1; margin-bottom: 0.8rem; }
+.working.is-folded { grid-template-rows: 0fr; opacity: 0; margin-bottom: 0; }
+.working-inner { min-height: 0; overflow: hidden; border-left: 2px solid var(--rule); padding-left: 0.8rem; }
+.working-note, .working-thinking { margin: 0 0 0.4rem; font-family: var(--serif); font-style: italic; font-size: 0.95rem; line-height: 1.5; color: var(--muted); }
+.working-thinking { color: var(--faint); font-size: 0.88rem; }
+.prose.is-draft { opacity: 0.4; }
+@media (prefers-reduced-motion: no-preference) {
+  .working { transition: grid-template-rows 420ms ease, opacity 300ms ease, margin-bottom 420ms ease; }
+  .prose.is-draft { transition: opacity 250ms ease; }
+  .prose.is-arriving { animation: arrive 260ms ease-out; }
+}
+@keyframes arrive { from { opacity: 0.35; } to { opacity: 1; } }
 .status { max-width: 100%; text-align: left; }
 .skeleton { display: grid; gap: 0.55rem; margin: 0.2rem 0 0.4rem; }
 .skeleton span { display: block; height: 0.8rem; border-radius: 4px; background: linear-gradient(90deg, var(--fog) 25%, var(--rule-soft) 50%, var(--fog) 75%); background-size: 200% 100%; }

@@ -73,8 +73,10 @@ describe("checking a run and continuing it", () => {
     expect(requests[1].ask).toMatchObject({ by: "runtime" });
     expect(requests[1].ask.text).toMatch(/S9abcd is not one of this answer's search results/);
     expect(done?.type === "done" && done.turn.lead).toBe("Neon's Launch plan costs $19 a month.");
-    // The record keeps the whole exchange, correction included, as a valid conversation.
+    // Later turns replay the question and the settled answer only: the working stays out.
     const transcript = store.transcript(done?.type === "done" ? done.turn.conversationId : "");
-    expect(transcript.map((e) => e.kind)).toEqual(["asked", "said", "asked", "said"]);
+    expect(transcript.map((e) => e.kind)).toEqual(["asked", "said"]);
+    expect(transcript[1]).toMatchObject({ text: "Neon's Launch plan costs $19 a month.", toolCalls: [] });
+    expect(events.some((e) => e.type === "revise")).toBe(true);
   });
 });

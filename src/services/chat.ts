@@ -20,9 +20,10 @@ import { ENDING_PREFIX, type OutputShape } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
 import { answerShapes, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
 import { IndexCard, ShapeIndex } from "../domain/card.ts";
-import { bareCitations, citationsIn, describeProblems, malformedCitations, markUnverified, quoteFound, quoteProblems } from "../domain/quotes.ts";
+import { bareCitations, citationsIn, describeProblems, markUnverified, quoteFound, quoteProblems, repairCitations } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
+import { describeNow } from "../domain/time.ts";
 import type { Clock } from "../ports/clock.ts";
 import type { MemoryStore } from "../ports/memory.ts";
 import type { AgentRuntimePort } from "../ports/runtime.ts";
@@ -39,10 +40,14 @@ export type TurnEvent =
   | { type: "activity"; activity: Activity[] }
   | { type: "sources"; sources: Source[] }
   | { type: "text"; text: string }
-  /** The model stopped talking to search; what it said so far was a note, not the answer. */
+  /** The model's reasoning as it streams, when the provider shows it: working, not the answer. */
+  | { type: "thinking"; text: string }
+  /** The model stopped talking to search; what it said so far was a working note, not the answer. */
   | { type: "searching" }
-  /** Discard the text streamed this round: it was not an answer. */
-  | { type: "retract" }
+  /** What was streamed is being redone (a correction, or a tool call written as text): keep it on screen as a draft until the new text arrives. */
+  | { type: "revise"; reason: string }
+  /** The answer's text is complete and checked; what follows (its index card) is not shown. */
+  | { type: "settled"; text: string }
   | { type: "shape"; shape: string; partial: unknown }
   | { type: "done"; turn: TurnRecord; cutShort: boolean }
   | { type: "error"; message: string };
@@ -127,7 +132,11 @@ export class ChatService {
     const ask = asked(message, memory.context + prepared);
     const fresh: Entry[] = [];
 
-    const record = (shape: string, text: string, answer?: unknown): TurnRecord => ({
+    // Slips of form are fixed in software; what still does not hold up is shown marked, never silently.
+    const repaired = (text: string) => repairCitations(text, book.snapshots);
+    const record = (shape: string, raw: string, answer?: unknown): TurnRecord => {
+      const text = repaired(raw);
+      return {
       id: turnId,
       conversationId: conversation.id,
       at: now.toISOString(),
@@ -140,7 +149,8 @@ export class ChatService {
       sources: book.sourcesFor(text, JSON.stringify(answer ?? "")),
       activity,
       model: model.id,
-    });
+      };
+    };
 
     // Where the time went, one line per turn in the server log.
     const started = Date.now();
@@ -161,18 +171,24 @@ export class ChatService {
           if (event.type === "error") throw new Error(event.message);
           if (event.type === "retract") {
             spoke = "";
-            out.push({ type: "retract" });
+            out.push({ type: "revise", reason: "Redoing a step" });
           } else if (event.type === "delta") {
             const d = event.delta;
             if (d.type === "text") {
               spoke += d.text;
               out.push({ type: "text", text: d.text });
+            } else if (d.type === "thinking") {
+              out.push({ type: "thinking", text: d.text });
             } else if (d.type === "tool_input" && d.name === SEARCH_TOOL.name) {
               // The query as the model writes it: a lane on screen before the search is even sent.
               const q = (d.partial as { query?: string } | null)?.query;
               if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
             } else if (d.name === INDEX_TOOL) {
-              // The index card follows the answer and is not shown: the prose stays the answer.
+              // The index card follows the answer and is not shown. The text is complete once it
+              // starts: if it holds up, it is the answer now, without waiting for the card.
+              if (d.type === "tool_start" && !this.check({ shape: "reply", text: spoke }, shapes, book)) {
+                out.push({ type: "settled", text: markUnverified(repaired(spoke), book.snapshots) });
+              }
             } else if (d.type === "tool_start") {
               // Whatever was said before a tool call is a note on the way, not the answer.
               spoke = "";
@@ -196,11 +212,12 @@ export class ChatService {
 
         const problem = this.check(ended, shapes, book);
         if (problem && corrections++ < MAX_CORRECTIONS) {
+          log(`correction: ${problem.split("\n").slice(0, 3).join(" ").slice(0, 300)}`);
           // Continue the run with the correction: the model sees what it said and why it was sent back.
           history = [...transcript, ask, ...fresh];
           next = asked(problem, undefined, "runtime");
           fresh.push(next);
-          out.push({ type: "retract" });
+          out.push({ type: "revise", reason: problem.startsWith("Some citations") ? "Fixing citations that didn't match their sources" : "Rewording" });
           spoke = "";
           continue;
         }
@@ -210,7 +227,7 @@ export class ChatService {
         const written = cardOf(prose ? ended.answer : (ended.answer as { index?: unknown } | undefined)?.index);
         const answer = prose ? undefined : markCardQuotes(parsed(shapes, ended) ?? ended.answer, book.snapshots, book.sources);
         const turn = record(prose ? "reply" : ended.shape, ended.text, answer);
-        store.append(conversation.id, [ask, ...fresh]);
+        store.append(conversation.id, settledExchange(message, now, input.timeZone, turn.shape === "reply" ? repaired(ended.text) : turn.answerText));
         store.saveTurn(turn);
         store.saveSnapshots(turn, book.snapshots);
         store.touch(conversation.id, clock.now());
@@ -229,7 +246,7 @@ export class ChatService {
       // close it with what was said, rather than leaving a half-finished tool round behind.
       const stopped = input.signal?.aborted;
       const text = spoke.trim() || (stopped ? "(stopped)" : "(something went wrong before I could answer)");
-      store.append(conversation.id, [ask, { kind: "said", text, toolCalls: [], stopReason: stopped ? "stopped" : "error" }]);
+      store.append(conversation.id, settledExchange(message, now, input.timeZone, text));
       store.saveTurn(record("reply", text));
       store.touch(conversation.id, clock.now());
       if (!stopped) throw error;
@@ -247,13 +264,13 @@ export class ChatService {
         if (call.name !== SEARCH_TOOL.name) continue;
         const args = call.arguments as SearchInput;
         searches.set(call.id, args);
-        upsert({ kind: "search", id: call.id, query: String(args.query ?? ""), since: args.since, domains: args.domains, fresh: args.fresh });
+        upsert({ kind: "search", id: call.id, query: laneLabel(args), since: args.since, domains: args.domains, fresh: args.fresh });
       }
     } else if (entry.kind === "ran") {
       for (const result of entry.results) {
         const args = searches.get(result.callId);
         if (!args) continue;
-        const lane: Activity = { kind: "search", id: result.callId, query: String(args.query ?? ""), since: args.since, domains: args.domains, fresh: args.fresh };
+        const lane: Activity = { kind: "search", id: result.callId, query: laneLabel(args), since: args.since, domains: args.domains, fresh: args.fresh };
         if (result.failed) {
           upsert({ ...lane, failed: result.content.replace(/^Search failed:\s*/, "").slice(0, 200) });
           continue;
@@ -280,8 +297,10 @@ export class ChatService {
     // The mechanism is not the person's business: "the context shows…" goes back to be said plainly.
     const leak = MECHANISM.find((m) => ended.text.toLowerCase().includes(m));
     if (leak) return `Your reply mentions "${leak}". Speak as someone who remembers (or does not), never about context, memory or calendars as a mechanism. Give the whole answer again.`;
-    const misses = quoteProblems(citationsIn(ended.text), book.snapshots);
-    const structural = [...misses.filter((p) => p.reason === "unknown source"), ...malformedCitations(ended.text), ...bareCitations(ended.text)];
+    const text = repairCitations(ended.text, book.snapshots);
+    const misses = quoteProblems(citationsIn(text), book.snapshots);
+    // Only what software cannot fix goes back: a source that was never found, a citation standing in for the fact.
+    const structural = [...misses.filter((p) => p.reason === "unknown source"), ...bareCitations(text)];
     const quoteMisses = misses.filter((p) => p.reason !== "unknown source");
     const problems = structural.length || quoteMisses.length > 2 ? [...structural, ...quoteMisses] : [];
     return problems.length ? describeProblems(problems) : null;
@@ -289,6 +308,21 @@ export class ChatService {
 }
 
 const INDEX_TOOL = `${ENDING_PREFIX}index`;
+const laneLabel = (args: SearchInput) => args.query ?? `Reading back ${args.pages?.join(", ") ?? "pages"}`;
+
+/**
+ * What later turns replay of this one: the question, with when it was asked, and the answer as
+ * given, its citations still tagged. Pages, searches and recalled context stay out: they were
+ * this turn's working, and an answer stands on its citations. If a later turn needs more of a page
+ * than the quote, the model reads it back by id (web_search `pages`), from the snapshot kept
+ * here. A boundary the answers follow, inspectable when wanted, and a replay that stays small.
+ */
+function settledExchange(message: string, at: Date, tz: string, answer: string): Entry[] {
+  return [
+    asked(message, `<context written-by="system">Asked ${describeNow(at, tz)}.</context>`),
+    { kind: "said", text: answer, toolCalls: [], stopReason: "end_turn" },
+  ];
+}
 /** Words that only describe how the agent works, never what it knows. */
 const MECHANISM = ["the context", "my context", "context block", "context i have", "my memory shows", "memory shows", "the calendar shows", "according to my memory", "<context", "<rechecked"];
 

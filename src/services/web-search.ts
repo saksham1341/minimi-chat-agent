@@ -10,7 +10,13 @@
  */
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import type { KeptPage } from "../ports/memory.ts";
 import type { SearchHit, SearchProvider, SearchQuery } from "../ports/search.ts";
+
+/** Where pages cited earlier are kept: the search service reads them back by id, nothing more. */
+export interface PageArchive {
+  keptPages(ids: string[]): KeptPage[];
+}
 
 export const SEARCH_TOOL = {
   name: "web_search",
@@ -22,9 +28,13 @@ export const SEARCH_TOOL = {
     "earlier date. Do not use it to find current prices: pricing pages change in place and rarely carry a date, so " +
     "`since` hides them. For a current price, search the vendor's pricing page with `domains` and `fresh: true`.\n\n" +
     "`fresh` re-reads pages now instead of from the search provider's cache. It is slower; use it only when the " +
-    "exact current state of a page matters.",
+    "exact current state of a page matters.\n\n" +
+    "`pages` reads pages your earlier answers in this conversation cited, by id, instead of searching: the text as it " +
+    "was when you cited it, or as it is now with `fresh: true`. Earlier answers keep their citations but not the pages, " +
+    "so use this when you need more of a page than the quote you kept.",
   input: z.object({
-    query: z.string().min(1).describe("What to search for, as you would type it into a search engine."),
+    query: z.string().min(1).optional().describe("What to search for, as you would type it into a search engine. Needed unless `pages` is given."),
+    pages: z.array(z.string().regex(/^S\d[0-9a-f]*$/)).max(8).optional().describe("Ids of pages cited earlier in this conversation to read again, e.g. ['S3f2a1']."),
     since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Only pages published on or after this day, YYYY-MM-DD."),
     domains: z.array(z.string()).max(10).optional().describe("Only these sites, e.g. ['neon.tech']."),
     fresh: z.boolean().optional().describe("Re-read the pages live. Slower."),
@@ -65,12 +75,15 @@ export interface SearchResult {
   url: string;
   domain: string;
   published?: string;
+  /** For a page read back from an earlier answer: the day its text was kept. */
+  kept?: string;
   text: string;
 }
 
 export class SearchService {
   constructor(
     private readonly provider: SearchProvider,
+    private readonly archive?: PageArchive,
     private readonly cache = new SearchCache(),
     private readonly timeoutMs = 20_000,
   ) {}
@@ -83,6 +96,8 @@ export class SearchService {
   }
 
   async search(input: SearchInput, signal?: AbortSignal): Promise<{ results: SearchResult[]; cached: boolean }> {
+    if (input.pages?.length) return { cached: false, results: await this.pages(input.pages, !!input.fresh, signal) };
+    if (!input.query) throw new Error("give a query, or pages to read");
     const query: SearchQuery = { query: input.query, since: input.since, domains: input.domains, fresh: input.fresh, maxResults: input.max_results ?? 5 };
     const timeout = AbortSignal.timeout(this.timeoutMs);
     try {
@@ -91,6 +106,14 @@ export class SearchService {
     } catch (error) {
       throw timeout.aborted ? new Error(`timed out after ${this.timeoutMs / 1000}s`) : error;
     }
+  }
+
+  /** Pages cited earlier, by id: as kept then, or re-read now when `fresh`. Unknown ids are skipped. */
+  async pages(ids: string[], fresh: boolean, signal?: AbortSignal): Promise<SearchResult[]> {
+    const kept = this.archive?.keptPages(ids) ?? [];
+    if (!kept.length) throw new Error(`none of ${ids.join(", ")} were cited earlier in this conversation`);
+    if (fresh) return (await this.read(kept.map((k) => k.url), signal)).filter((p) => p.readable).map(({ readable: _r, ...p }) => p);
+    return kept.map((k) => ({ id: k.id, title: k.url, url: k.url, domain: domainOf(k.url), kept: k.seenAt.slice(0, 10), text: k.text }));
   }
 
   /** Read exact pages now, live, as results with their stable ids. Unreadable pages come back without text. */
@@ -109,7 +132,7 @@ export function formatResults(results: SearchResult[], since?: string): string {
       : "No results. Try different words.";
   }
   return results
-    .map((r) => [`[${r.id}] ${r.title} — ${r.domain}${r.published ? ` — published ${r.published}` : ""}`, r.url, r.text.trim()].join("\n"))
+    .map((r) => [`[${r.id}] ${r.title} — ${r.domain}${r.published ? ` — published ${r.published}` : ""}${r.kept ? ` — as kept on ${r.kept}` : ""}`, r.url, r.text.trim()].join("\n"))
     .join("\n\n");
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bareCitations, citationsIn, malformedCitations, markUnverified, quoteFound, quoteProblems, withoutQuotes } from "../src/domain/quotes.ts";
+import { bareCitations, citationsIn, malformedCitations, markUnverified, quoteFound, quoteProblems, repairCitations, withoutQuotes } from "../src/domain/quotes.ts";
 
 const page = "Pricing. **Starter** — $20/seat/month, billed monthly. Professional: $100 per seat per month, billed annually.";
 const snapshots = new Map([["S1", page]]);
@@ -52,5 +52,35 @@ describe("quoted citations", () => {
 
   it("treats a line break inside a quote as a space", () => {
     expect(citationsIn('x [S1 "Starter — $20/seat/month,\\nbilled monthly"]').map((c) => quoteFound(c.quote!, page))).toEqual([true]);
+  });
+});
+
+describe("slips of form are repaired, not sent back", () => {
+  it("turns words without quote marks into a quoted citation when the page has them, a plain marker when not", () => {
+    const fixed = repairCitations("Starter costs $20 a seat [S1 Starter — $20/seat/month]. Pro is pricier [S1 the premium plan].", snapshots);
+    expect(malformedCitations(fixed)).toEqual([]);
+    expect(citationsIn(fixed)).toEqual([{ id: "S1", quote: "Starter — $20/seat/month", verified: true }, { id: "S1" }]);
+  });
+
+  it("writes a citation repeated back to back once", () => {
+    const text = 'Starter is $20 [S1 "$20/seat/month, billed monthly"][S1 "$20/seat/month, billed monthly"].';
+    expect(citationsIn(repairCitations(text, snapshots))).toHaveLength(1);
+  });
+});
+
+describe("a quote has to support its sentence's figure", () => {
+  const verified = (text: string) => citationsIn(markUnverified(text, snapshots)).map((c) => c.verified);
+
+  it("marks a real quote that does not state the sentence's price", () => {
+    expect(verified('Starter is still $25 a seat [S1 "billed monthly. Professional"].')).toEqual([false]);
+  });
+
+  it("accepts the quote that does, alone or beside others", () => {
+    expect(verified('Starter is $20 a seat [S1 "$20/seat/month, billed monthly"].')).toEqual([true]);
+    expect(verified('Starter is $20 a seat [S1 "billed monthly. Professional"][S1 "$20/seat/month"].')).toEqual([true, true]);
+  });
+
+  it("leaves sentences without figures to the quote lookup alone", () => {
+    expect(verified('Starter is billed monthly [S1 "billed monthly"].')).toEqual([true]);
   });
 });

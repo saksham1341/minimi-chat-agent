@@ -124,14 +124,62 @@ export function describeProblems(problems: QuoteProblem[]): string {
   );
 }
 
-/** Marks citations whose quotes failed as unverified (`[S3 !"..."]`), so the screen can say so. */
+/**
+ * Fixes what is only a slip of form, so it never costs a rewrite: `[S41fce drivers' standings]`
+ * (words without quote marks) becomes a quoted citation when the words are on the page and a plain
+ * marker when not, and a citation repeated back to back is written once.
+ */
+export function repairCitations(text: string, snapshots: ReadonlyMap<string, string>): string {
+  const valid = new Set([...text.matchAll(MARKER)].map((m) => m.index));
+  const fixed = text.replace(/\[(S\d[0-9a-f]*)\b([^\]\n]*)\]/g, (m, id: string, inner: string, at: number) => {
+    if (valid.has(at)) return m;
+    const words = inner.replace(/["“”]/g, " ").replace(/^[\s,:;-]+|[\s,:;-]+$/g, "").replace(/\s+/g, " ");
+    const snapshot = snapshots.get(id);
+    return snapshot !== undefined && !tooShort(words) && quoteFound(words, snapshot) ? `[${id} "${words}"]` : `[${id}]`;
+  });
+  return fixed.replace(/(\[S\d[0-9a-f]*[^\]\n]*\])(?:\s*\1)+/g, "$1");
+}
+
+/** Prices, percentages and versions: the figures a sentence can get wrong. */
+const FIGURE = /[$€£¥₹]\s?\d[\d,.]*|\d[\d,.]*\s?%|\b\d+\.\d+(?:\.\d+)?\b/g;
+const figuresIn = (s: string) => [...s.matchAll(FIGURE)].map((m) => m[0].replace(/[\s,$€£¥₹%]/g, "").replace(/\.$/, "")).filter(Boolean);
+
+/**
+ * Marks citations that do not hold up as unverified (`[S3 !"..."]`), so the screen can say so. A
+ * quote holds up when it is on the page and, if the sentence it supports states a price, percentage
+ * or version, says at least one of them: "Still $5/mo" citing "at the same price as the Eco plan"
+ * quotes a real page and still shows nothing about $5.
+ */
 export function markUnverified(text: string, snapshots: ReadonlyMap<string, string>): string {
-  return text.replace(MARKER, (m, id: string, _bang, quote: string | undefined, rest: string) => {
+  const markers = [...text.matchAll(MARKER)];
+  const supported = new Map<number, boolean>();
+  for (let i = 0; i < markers.length; ) {
+    // Citations side by side support the same sentence, together.
+    let j = i;
+    while (j + 1 < markers.length && /^\s*$/.test(text.slice(markers[j].index + markers[j][0].length, markers[j + 1].index))) j++;
+    const group = markers.slice(i, j + 1);
+    const figures = figuresIn(claimBefore(text, group[0].index, i ? markers[i - 1].index + markers[i - 1][0].length : 0));
+    const quotes = group.map((m) => (m[3] === undefined ? "" : unescape(m[3]).replace(/[\s,]/g, ""))).join(" ");
+    const ok = !figures.length || figures.some((f) => quotes.includes(f));
+    for (const m of group) supported.set(m.index, ok);
+    i = j + 1;
+  }
+  return text.replace(MARKER, (m, id: string, _bang, quote: string | undefined, rest: string, at: number) => {
     if (quote === undefined) return m;
     const snapshot = snapshots.get(id);
-    const ok = snapshot !== undefined && quoteFound(unescape(quote), snapshot);
+    const ok = snapshot !== undefined && quoteFound(unescape(quote), snapshot) && supported.get(at) !== false;
     return ok ? m : `[${id} !"${quote}"${rest ?? ""}]`;
   });
+}
+
+/** The sentence a citation at `at` follows: back to the sentence's start or the previous citation. */
+function claimBefore(text: string, at: number, floor: number): string {
+  const before = text.slice(floor, at);
+  const line = before.slice(before.lastIndexOf("\n") + 1);
+  const sentences = line.split(/(?<=[.!?])\s+(?=[A-Z*(\["])/);
+  const last = sentences.at(-1) ?? "";
+  // "…a month each. [S1 "…"]": the citation follows the full stop, so the claim is the sentence before.
+  return last.trim().split(/\s+/).length < 3 && sentences.length > 1 ? sentences.at(-2)! : last;
 }
 
 // A model copying across a line break writes \n: that is whitespace, not the letter n.

@@ -26,6 +26,8 @@ import type { MemoryStore } from "../ports/memory.ts";
 /** How far back a day can be named; older exchanges are found by topic. */
 const WINDOW_DAYS = 60;
 const CALENDAR_WEEKS = 3;
+/** How many matched exchanges a re-check measures against. */
+const MAX_BASELINE = 2;
 /** A term carried by more than this share of exchanges is too common to point at one. */
 const COMMON_SHARE = 0.3;
 
@@ -100,10 +102,10 @@ export class RecallService {
     const possible = candidates.filter((c) => c.confidence !== top);
 
     lines.push("", `Most likely meant (${top} confidence):`);
-    for (const c of likely) lines.push("", ...describe(c, claims.get(c.turn.id) ?? [], cards.get(c.turn.id), tz));
+    for (const c of likely) lines.push("", ...describe(c, claims.get(c.turn.id) ?? [], cards.get(c.turn.id), now, tz));
     if (possible.length) {
       lines.push("", "Also possible, less likely:");
-      for (const c of possible) lines.push("", ...describe(c, claims.get(c.turn.id) ?? [], cards.get(c.turn.id), tz));
+      for (const c of possible) lines.push("", ...describe(c, claims.get(c.turn.id) ?? [], cards.get(c.turn.id), now, tz));
     }
 
     // Later observations, kept apart from the baseline and dated.
@@ -122,7 +124,8 @@ export class RecallService {
         ...(dated ? { days: [day] } : {}),
       });
     }
-    const baseline = likely.flatMap((c) => (claims.get(c.turn.id) ?? []).filter((x) => x.origin === "stated"));
+    // What a re-check measures against: the best one or two matches, not every exchange of a busy day.
+    const baseline = likely.slice(0, MAX_BASELINE).flatMap((c) => (claims.get(c.turn.id) ?? []).filter((x) => x.origin === "stated"));
     activity.push({
       kind: "memory",
       exchanges: turns.map((t) => ({ at: t.at, question: t.question })),
@@ -159,18 +162,27 @@ export class RecallService {
         n && n.strength >= 0.8 && weight > 0 ? "high" : (n && n.strength >= 0.9) || weight >= 1.5 || (n && weight > 0) ? "medium" : "low";
       candidates.push({ turn, day, dayStrength: n?.strength ?? 0, dayPhrase: n?.phrase, terms, confidence });
     }
+    // Within a named day, the topic decides: when some of that day's exchanges match it, the others
+    // were merely asked the same day. When none does and the day was busy, which one is meant is a guess.
+    for (const [, members] of group(candidates.filter((c) => c.dayStrength > 0), (c) => isoDay(c.day))) {
+      const onTopic = members.some((c) => c.terms.length > 0);
+      for (const c of members) {
+        if (onTopic && !c.terms.length) candidates.splice(candidates.indexOf(c), 1);
+        else if (!onTopic && members.length > 2) c.confidence = "low";
+      }
+    }
     const rank = { high: 3, medium: 2, low: 1 };
     candidates.sort((a, b) => rank[b.confidence] - rank[a.confidence] || b.terms.length - a.terms.length || b.turn.at.localeCompare(a.turn.at));
     return { candidates: candidates.slice(0, 10), named, recent };
   }
 }
 
-function describe(c: Candidate, claims: Claim[], card: { kind: string; summary: string } | undefined, tz: string): string[] {
+function describe(c: Candidate, claims: Claim[], card: { kind: string; summary: string } | undefined, now: Date, tz: string): string[] {
   const why = [c.dayPhrase && `"${c.dayPhrase}" names that day`, c.terms.length && `it was about ${c.terms.map((t) => `"${t}"`).join(", ")}`]
     .filter(Boolean)
     .join("; ");
   const out = [
-    `[${longDate(c.turn.at, tz)}] matched because ${why || "of its day"}.`,
+    `[${longDate(c.turn.at, tz)}, ${ago(c.turn.at, now)}] matched because ${why || "of its day"}.`,
     ...(card?.summary ? [`In short: ${card.summary}`] : []),
     `Person asked: ${clip(c.turn.question, 400)}`,
     `You answered: ${clip(c.turn.answerText, 4000)}`,
@@ -214,6 +226,12 @@ const clip = (text: string, n: number) => (text.length > n ? `${text.slice(0, n)
 
 function longDate(iso: string, tz: string) {
   return new Date(iso).toLocaleString("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+/** "4 minutes ago", "3 hours ago", "6 days ago": so nobody has to estimate it. */
+export function ago(iso: string, now: Date): string {
+  const minutes = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60_000));
+  const [n, unit] = minutes < 60 ? [minutes, "minute"] : minutes < 48 * 60 ? [Math.round(minutes / 60), "hour"] : [Math.round(minutes / 1440), "day"];
+  return n === 0 ? "just now" : `${n} ${unit}${n === 1 ? "" : "s"} ago`;
 }
 function shortDate(iso: string, tz: string) {
   return new Date(iso).toLocaleDateString("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" });

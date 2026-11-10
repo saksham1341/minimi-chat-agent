@@ -35,9 +35,11 @@ export function Turn(props: {
         <time dateTime={turn.at}>{time}</time>
       </div>
       <div className="answer">
-        {live && <Status turn={turn} onOpen={onFocus} />}
-        {live && !turn.text && turn.answer === undefined && <Skeleton />}
-        {turn.text && <Prose text={turn.text} sources={turn.sources} />}
+        {live && !turn.settled && <Status turn={turn} onOpen={onFocus} />}
+        <Working turn={turn} />
+        {live && !turn.text && turn.draft === undefined && turn.answer === undefined && <Skeleton />}
+        {turn.draft !== undefined && <Prose className="prose is-draft" text={turn.draft} sources={turn.sources} />}
+        {turn.text && <Prose className="prose is-arriving" text={turn.text} sources={turn.sources} />}
         {card &&
           (canvas && turn.shape !== "choices" ? (
             <button className={`canvas-ref${focused ? " is-focused" : ""}`} onClick={onFocus}>
@@ -86,15 +88,33 @@ function Status({ turn, onOpen }: { turn: ViewTurn; onOpen: () => void }) {
           : ahead
             ? "Reading ahead"
             : "Thinking";
-  if (step === "write" && turn.text) return null; // the answer itself is now the progress
-  // The model's own words about what it is doing, as soon as it says them.
-  const note = turn.notes.at(-1);
+  if (step === "write" && turn.text && !turn.revising) return null; // the answer itself is now the progress
   return (
     <button className="status" onClick={onOpen}>
       <span className="status-dot" aria-hidden />
-      <span className="status-label">{label}</span>
-      {note && <span className="status-note">{note.length > 120 ? `${note.slice(0, 117)}…` : note}</span>}
+      <span className="status-label">{turn.revising ?? label}</span>
     </button>
+  );
+}
+
+/**
+ * The model's working, in its own words, while it works: what it said before each search and its
+ * reasoning when the provider streams it. Written to be read (the instruction says so), and folded
+ * away once the answer is final; the canvas keeps the notes.
+ */
+function Working({ turn }: { turn: ViewTurn }) {
+  const thinking = turn.thinking.trim();
+  if (!turn.notes.length && !thinking) return null;
+  const folded = turn.settled || turn.status !== "streaming";
+  return (
+    <div className={`working${folded ? " is-folded" : ""}`} aria-hidden={folded}>
+      <div className="working-inner">
+        {turn.notes.map((n, i) => (
+          <p key={i} className="working-note">{n}</p>
+        ))}
+        {thinking && <p className="working-thinking">{thinking.length > 400 ? `…${thinking.slice(-400)}` : thinking}</p>}
+      </div>
+    </div>
   );
 }
 

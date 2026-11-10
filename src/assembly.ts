@@ -61,8 +61,8 @@ export function settingsFromEnv(env = process.env): Settings {
 }
 
 export function assemble(settings: Settings, log: (message: string) => void = console.log, env = process.env) {
-  const search = new SearchService(chooseSearch(settings));
   const store = new SqliteMemory(settings.dataFile);
+  const search = new SearchService(chooseSearch(settings), store);
   const clock = settings.now ? new ShiftedClock(new Date(settings.now)) : new SystemClock();
 
   // The runtime reaches this application's tools over MCP, at /mcp on this server.

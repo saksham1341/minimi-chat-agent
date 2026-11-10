@@ -1,6 +1,7 @@
 /**
  * The memory store on SQLite, through Node's built-in `node:sqlite`, so `npm install` compiles
- * nothing. One file under ./data; FTS5 for recall by topic, an index on time for recall by date.
+ * nothing. One file under ./data; recall by topic goes through the exchange cards' terms, by date
+ * through an index on time.
  */
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
@@ -8,7 +9,7 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Entry } from "../../agents/conversation.ts";
 import type { Claim, ClaimDraft, Conversation, ExchangeCard, TurnRecord } from "../../domain/memory.ts";
-import type { MemoryStore } from "../../ports/memory.ts";
+import type { KeptPage, MemoryStore } from "../../ports/memory.ts";
 
 const SCHEMA = `
 create table if not exists conversations (
@@ -25,10 +26,9 @@ create table if not exists turns (
 );
 create index if not exists turns_at on turns(at);
 create index if not exists turns_conversation on turns(conversation_id, at);
-create virtual table if not exists turns_fts using fts5(turn_id unindexed, question, answer_text);
 create table if not exists claims (
   id text primary key, turn_id text not null, conversation_id text not null, subject text not null,
-  value text not null, source_url text, observed_at text not null
+  value text not null, source_url text, observed_at text not null, quote text, origin text not null
 );
 create index if not exists claims_turn on claims(turn_id);
 create table if not exists exchange_cards (
@@ -54,10 +54,6 @@ export class SqliteMemory implements MemoryStore {
     this.db = new DatabaseSync(path);
     this.db.exec("pragma journal_mode = wal;");
     this.db.exec(SCHEMA);
-    // Added after the first release: an existing memory file gains the column in place.
-    const columns = (this.db.prepare("pragma table_info(claims)").all() as Row[]).map((c) => c.name);
-    if (!columns.includes("quote")) this.db.exec("alter table claims add column quote text");
-    if (!columns.includes("origin")) this.db.exec("alter table claims add column origin text not null default 'stated'");
   }
 
   createConversation(title: string, at: Date): Conversation {
@@ -102,7 +98,6 @@ export class SqliteMemory implements MemoryStore {
     this.db
       .prepare("insert into turns values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(t.id, t.conversationId, t.at, t.question, t.answerText, t.lead, t.shape, t.answer === undefined ? null : JSON.stringify(t.answer), JSON.stringify(t.sources), JSON.stringify(t.activity), t.model);
-    this.db.prepare("insert into turns_fts values (?, ?, ?)").run(t.id, t.question, t.answerText);
   }
 
   turns(conversationId: string) {
@@ -113,29 +108,6 @@ export class SqliteMemory implements MemoryStore {
     return (
       this.db.prepare("select * from turns where at >= ? and at < ? order by at limit ?").all(from.toISOString(), to.toISOString(), limit) as Row[]
     ).map(toTurn);
-  }
-
-  searchTurns(terms: string[], limit: number, excludeConversation: string | undefined, before: Date) {
-    const clean = terms.map((t) => t.replace(/"/g, "")).filter(Boolean);
-    if (!clean.length) return [];
-    // Prefix match on a crude stem, so "CRMs" finds "CRM" and "pricing" finds "price"-less variants.
-    const match = clean.map((t) => `"${stem(t)}"*`).join(" OR ");
-    const rows = this.db
-      .prepare(
-        `select turns.* from turns_fts join turns on turns.id = turns_fts.turn_id
-         where turns_fts match ? and turns.conversation_id != ? and turns.at <= ? order by bm25(turns_fts) limit ?`,
-      )
-      .all(match, excludeConversation ?? "", before.toISOString(), limit) as Row[];
-    return rows.map(toTurn);
-  }
-
-  documentFrequency(term: string, before: Date): number {
-    const clean = term.replace(/"/g, "");
-    if (!clean) return 0;
-    const row = this.db
-      .prepare(`select count(*) as n from turns_fts join turns on turns.id = turns_fts.turn_id where turns_fts match ? and turns.at <= ?`)
-      .get(`"${stem(clean)}"*`, before.toISOString()) as Row;
-    return row.n as number;
   }
 
   turnCount(before: Date): number {
@@ -205,6 +177,14 @@ export class SqliteMemory implements MemoryStore {
     return new Map(rows.map((r) => [r.id as string, r.text as string]));
   }
 
+  keptPages(ids: string[]): KeptPage[] {
+    if (!ids.length) return [];
+    const rows = this.db
+      .prepare(`select source_id as id, url, text, max(seen_at) as seenAt from snapshots where source_id in (${ids.map(() => "?").join(",")}) group by source_id`)
+      .all(...ids) as Row[];
+    return rows.map((r) => ({ id: r.id as string, url: r.url as string, text: r.text as string, seenAt: r.seenAt as string }));
+  }
+
   claimsFor(turnIds: string[]): Claim[] {
     if (!turnIds.length) return [];
     const rows = this.db
@@ -224,7 +204,6 @@ export class SqliteMemory implements MemoryStore {
   }
 }
 
-const stem = (term: string) => (term.length > 3 ? term.replace(/(?:es|s)$/, "") : term);
 
 const toConversation = (r: Row): Conversation => ({
   id: r.id as string,
