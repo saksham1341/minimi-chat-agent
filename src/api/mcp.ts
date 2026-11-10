@@ -15,9 +15,10 @@ export async function handleMcp(search: SearchService, req: IncomingMessage, res
   server.registerTool(
     SEARCH_TOOL.name,
     { description: SEARCH_TOOL.description, inputSchema: SEARCH_TOOL.input },
-    async (input) => {
+    async (input, ctx) => {
       try {
-        const payload: SearchPayload = { results: await search.search(input) };
+        // The client's cancel (the person pressed stop) reaches the provider call.
+        const payload: SearchPayload = { results: await search.search(input, ctx.mcpReq.signal) };
         return { content: [{ type: "text" as const, text: JSON.stringify(payload) }] };
       } catch (error) {
         // A failed search is still an answer: the model asked and is owed one.

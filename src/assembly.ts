@@ -48,8 +48,9 @@ export interface Settings {
 export function settingsFromEnv(env = process.env): Settings {
   const blank = (v?: string) => (v && v.trim() ? v.trim() : undefined);
   return {
-    // All interfaces by default, so the app is reachable over a LAN or a tailnet, not only localhost.
-    host: blank(env.HOST) ?? "0.0.0.0",
+    // Loopback by default: there is no sign-in, so anyone who can reach the port can read the
+    // conversations and spend the keys. HOST=0.0.0.0 opens it to a LAN or tailnet on purpose.
+    host: blank(env.HOST) ?? "127.0.0.1",
     port: Number(env.PORT ?? 3000),
     dataFile: env.DATA_FILE ?? "data/memory.db",
     timeZone: blank(env.TIME_ZONE) ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -94,7 +95,8 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   const search = new SearchService(chooseSearch(settings));
   // The runtime reaches search the way it would reach any tool server: over MCP. By default that
   // server is this process, at /mcp; MCP_ENDPOINT points it somewhere else without a code change.
-  const tools = new McpToolSurface(new URL(settings.mcpEndpoint ?? `http://127.0.0.1:${settings.port}/mcp`));
+  const self = settings.host === "0.0.0.0" || settings.host === "::" ? "127.0.0.1" : settings.host;
+  const tools = new McpToolSurface(new URL(settings.mcpEndpoint ?? `http://${self.includes(":") ? `[${self}]` : self}:${settings.port}/mcp`));
   const store = new SqliteMemory(settings.dataFile);
   const clock = settings.now ? new ShiftedClock(new Date(settings.now)) : new SystemClock();
   const recall = new RecallService(store);

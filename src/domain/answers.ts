@@ -100,21 +100,25 @@ function shape(name: string, schema: z.ZodType, description: string, check?: Che
  * A page from before the baseline can only show what was already true then.
  */
 export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Source[]): string | null {
+  // Evidence of what is true now: dated on or after the baseline, or an undated page that was read
+  // live or found on its own site. An undated page from anywhere else is a roundup of unknown age.
+  const shows = (s: Source) => (s.published ? s.published >= changes.since : !!(s.live || s.firstParty));
+  const describe = (s: Source) =>
+    `${s.id} (${s.domain}, ${s.published ? `published ${s.published}` : "undated, not read live or on its own site"})`;
   const problems: string[] = [];
   for (const item of changes.items) {
-    if (item.status !== "changed") continue;
+    if (item.status !== "changed" && item.status !== "corrected") continue;
     if (!item.sources.length) {
-      problems.push(`"${item.subject}" is marked changed but cites no source`);
+      problems.push(`"${item.subject}" is marked ${item.status} but cites no source`);
       continue;
     }
     const cited = item.sources.map((id) => sources.find((s) => s.id === id)).filter((s): s is Source => !!s);
-    if (cited.length && cited.every((s) => s.published && s.published < changes.since)) {
-      const dates = cited.map((s) => `${s.id} published ${s.published}`).join(", ");
-      problems.push(`"${item.subject}" is marked changed, but every source it cites predates ${changes.since} (${dates})`);
+    if (cited.length && !cited.some(shows)) {
+      problems.push(`"${item.subject}" is marked ${item.status}, but none of its sources shows what is true now: ${cited.map(describe).join(", ")}`);
     }
   }
   return problems.length
-    ? `${problems.join("; ")}. A page from before the baseline cannot show a change since then. Check the vendor's current page, or mark it unchanged or unverified, then call answer_changes again.`
+    ? `${problems.join("; ")}. Overturning what was said needs the vendor's own current page (search it with \`domains\` and \`fresh: true\`) or a source published on or after ${changes.since}. Re-check, or mark it unchanged or unverified, then call answer_changes again.`
     : null;
 }
 

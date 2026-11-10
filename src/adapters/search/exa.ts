@@ -26,7 +26,9 @@ export class ExaSearch implements SearchProvider {
         ...(q.domains?.length ? { includeDomains: q.domains } : {}),
         contents: {
           highlights: { query: q.query },
-          text: { maxCharacters: 800 },
+          // A targeted read (one site, or live) is reading a page for its facts: pricing tables need
+          // room. A general search wants breadth, so short passages from more pages.
+          text: { maxCharacters: q.domains?.length || q.fresh ? 5000 : 800 },
           ...(q.fresh ? { maxAgeHours: 0, livecrawlTimeout: 8000 } : {}),
         },
       }),
@@ -40,7 +42,7 @@ export class ExaSearch implements SearchProvider {
       url: r.url,
       published: r.publishedDate?.slice(0, 10),
       // Highlights are the passages that match the query; the opening of the page gives context.
-      excerpt: [...(r.highlights ?? []), r.text ?? ""].filter(Boolean).join("\n…\n").slice(0, 1500),
+      excerpt: [...(r.highlights ?? []), r.text ?? ""].filter(Boolean).join("\n…\n").slice(0, q.domains?.length || q.fresh ? 6000 : 1500),
     }));
   }
 }

@@ -16,6 +16,10 @@ export interface Source {
   published?: string;
   /** The opening of the passage the search returned, for the citation preview. */
   snippet?: string;
+  /** Read live for this answer (`fresh`), not from the search provider's cache. */
+  live?: boolean;
+  /** Found by a search limited to its own site (`domains`): the vendor's page, not a roundup. */
+  firstParty?: boolean;
 }
 
 /** One thing the agent did on the way to an answer, shown to the person as it happens. */

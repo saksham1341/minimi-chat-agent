@@ -139,16 +139,17 @@ describe("the MCP boundary", () => {
 describe("the evidence rule for a 'changed' verdict", () => {
   const sources = [
     { id: "S1", url: "https://blog.example.com/old", title: "", domain: "blog.example.com", published: "2026-09-09" },
-    { id: "S2", url: "https://example.com/pricing", title: "", domain: "example.com" },
+    { id: "S2", url: "https://example.com/pricing", title: "", domain: "example.com", live: true },
+    { id: "S4", url: "https://roundup.example.net/best-crms", title: "", domain: "roundup.example.net" },
     { id: "S3", url: "https://example.com/news", title: "", domain: "example.com", published: "2026-11-10" },
   ];
-  const report = (sourceIds: string[], status: "changed" | "unchanged" = "changed") => ({
+  const report = (sourceIds: string[], status: "changed" | "unchanged" | "corrected" = "changed") => ({
     headline: "", title: "", summary: "", since: "2026-11-09",
     items: [{ subject: "Plan price", status, sources: sourceIds }],
   });
 
   it("refuses a change backed only by pages from before the baseline", () => {
-    expect(evidenceProblem(report(["S1"]), sources)).toMatch(/S1 published 2026-09-09/);
+    expect(evidenceProblem(report(["S1"]), sources)).toMatch(/S1 \(blog.example.com, published 2026-09-09\)/);
   });
   it("refuses a change with no source", () => {
     expect(evidenceProblem(report([]), sources)).toMatch(/cites no source/);
@@ -157,7 +158,12 @@ describe("the evidence rule for a 'changed' verdict", () => {
     expect(evidenceProblem(report(["S1", "S2"]), sources)).toBeNull();
     expect(evidenceProblem(report(["S3"]), sources)).toBeNull();
   });
-  it("does not police verdicts other than 'changed'", () => {
+  it("refuses a change or correction backed only by an undated third-party page", () => {
+    expect(evidenceProblem(report(["S4"]), sources)).toMatch(/S4 \(roundup.example.net, undated/);
+    expect(evidenceProblem(report(["S4"], "corrected"), sources)).toMatch(/marked corrected/);
+  });
+
+  it("does not police verdicts other than 'changed' and 'corrected'", () => {
     expect(evidenceProblem(report(["S1"], "unchanged"), sources)).toBeNull();
   });
 });

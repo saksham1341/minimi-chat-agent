@@ -124,7 +124,7 @@ export class CitedSearch implements ToolSurface {
       this.report({ ...activity, results: 0 }, this.sources);
       return result;
     }
-    const numbered = hits.map((hit) => ({ hit, source: this.number(hit) }));
+    const numbered = hits.map((hit) => ({ hit, source: this.number(hit, args) }));
     this.report({ ...activity, results: hits.length, hits: numbered.map((n) => n.source.id) }, this.sources);
 
     if (!numbered.length) {
@@ -146,9 +146,17 @@ export class CitedSearch implements ToolSurface {
   }
 
   /** The same page found by two searches keeps one number. */
-  private number(hit: SearchHit): Source {
+  private number(hit: SearchHit, args: Partial<SearchInput>): Source {
+    const domain = domainOf(hit.url);
+    const live = args.fresh === true;
+    const firstParty = !!args.domains?.some((d) => domain === d.replace(/^www\./, "") || domain.endsWith(`.${d.replace(/^www\./, "")}`));
     const known = this.byUrl.get(hit.url);
-    if (known) return known;
+    if (known) {
+      // Seen before from the cache or a general search; a later live or site-limited read upgrades it.
+      if (live) known.live = true;
+      if (firstParty) known.firstParty = true;
+      return known;
+    }
     const source: Source = {
       id: `S${this.sources.length + 1}`,
       url: hit.url,
@@ -156,6 +164,8 @@ export class CitedSearch implements ToolSurface {
       domain: domainOf(hit.url),
       ...(hit.published ? { published: hit.published } : {}),
       ...(snippetOf(hit.excerpt) ? { snippet: snippetOf(hit.excerpt) } : {}),
+      ...(live ? { live } : {}),
+      ...(firstParty ? { firstParty } : {}),
     };
     this.sources.push(source);
     this.byUrl.set(hit.url, source);

@@ -14,6 +14,7 @@ const server = serve(app, join(root, "web/dist"));
 server.listen(app.settings.port, app.settings.host, () => {
   const models = app.catalog.list();
   console.log(`\n  Chat agent on http://localhost:${app.settings.port}`);
+  if (app.settings.host === "127.0.0.1") console.log("               (local only; set HOST=0.0.0.0 to open it to your network)");
   if (app.settings.host === "0.0.0.0") {
     for (const [name, addresses] of Object.entries(networkInterfaces())) {
       for (const a of addresses ?? []) {
