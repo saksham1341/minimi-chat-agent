@@ -10,7 +10,7 @@
  * "Pipedrive" counts and a match on "now" or "thing" cannot. Whether any of it matters to the
  * question is the model's judgement.
  */
-import { dateIn, describeNow, isoDay, resolveTimeRefs, type TimeRef } from "../domain/time.ts";
+import { addDays, dateIn, dayLabel, daysBetween, dayWords, describeNow, isoDay, startOfDay, weekday, type DayWords, type Ymd } from "../domain/time.ts";
 import type { Activity, Claim, TurnRecord } from "../domain/memory.ts";
 import type { MemoryStore } from "../ports/memory.ts";
 
@@ -21,113 +21,106 @@ const STOP = new Set(
   ),
 );
 
-/** A word counts as a topic signal if at most this share of past exchanges contain it. */
+/** A word counts as a topic signal if at most this share of past exchanges contain it (with enough history). */
 const RARE_SHARE = 0.2;
 
 export interface Recollection {
   /** The text block placed before the person's message. */
   context: string;
-  /** What to show on screen ("Looked back at Tue 3 Nov: 2 exchanges"). */
+  /** What to show on screen ("Found 1 exchange from Tue 3 Nov"). */
   activity: Activity[];
   /** Facts stated in the recalled exchanges, with where each came from. */
   claims: Claim[];
   /**
-   * The facts worth reading ahead for: from the named day's exchanges that share a topic word with
-   * the message, or all of that day's if the message names no topic ("still correct?").
+   * The facts worth reading ahead for: from exchanges the message points at by their day, that
+   * also share its topic (or all of them, if the message names no topic: "still correct?").
    */
   readAhead: Claim[];
-  /** How the memory was found: by a named day, by shared rare words, or not at all. */
+  /** How the memory was found: by its day's words, by shared rare words, or not at all. */
   found: "dated" | "topic" | "none";
-  /**
-   * Found by a named day: the person is pointing at a particular earlier conversation, which is
-   * worth reading ahead for. Memory found by shared words goes to the model as context only.
-   */
-  strong: boolean;
+}
+
+/** How far back day words are matched; older exchanges are found by topic only. */
+const WINDOW_DAYS = 120;
+const CALENDAR_WEEKS = 3;
+
+interface Scored {
+  turn: TurnRecord;
+  date: number;
+  topic: number;
+  score: number;
 }
 
 export class RecallService {
   constructor(private readonly store: MemoryStore) {}
 
   recall(message: string, conversationId: string, now: Date, tz: string): Recollection {
-    const refs = resolveTimeRefs(message, now, tz);
+    const today = dateIn(now, tz);
+    const words = new Set(tokens(message));
+    const topics = topicTerms(message);
+    const rare = this.rareTerms(topics, now);
     const lines = [`Now: ${describeNow(now, tz)} (${tz}).`];
     const activity: Activity[] = [];
-    const chosen = new Map<string, TurnRecord>();
-    const keep = (turns: TurnRecord[]) => turns.forEach((t) => chosen.set(t.id, t));
-    // Memory never reaches past the agent's own clock.
-    const until = (to: Date) => (to.getTime() < now.getTime() ? to : now);
 
-    if (refs.length) {
-      lines.push("", "Time references in this message:");
-      for (const ref of refs) {
-        lines.push(`- "${ref.phrase}" → ${ref.label}${ref.alternative ? ` (or ${ref.alternative.label}, if they meant the week before)` : ""}`);
-        const primary = this.store.turnsBetween(ref.from, until(ref.to), 12);
-        const other = ref.alternative ? this.store.turnsBetween(ref.alternative.from, until(ref.alternative.to), 12) : [];
-        keep(primary);
-        keep(other);
-        activity.push(dayActivity(ref, primary.length, other.length, tz));
+    // Candidates: everything recent (to match on day words), plus older exchanges on the topic.
+    const recent = this.store.turnsBetween(startOfDay(addDays(today, -WINDOW_DAYS), tz), now, 500);
+    const older = rare.length ? this.store.searchTurns(rare, 8, conversationId, now) : [];
+    const candidates = new Map([...recent, ...older].map((t) => [t.id, t]));
+
+    // One shared word is enough only when it is distinctive as written (a name or acronym the
+    // person capitalised mid-sentence: "CRMs", "Neon"); otherwise two shared rare words are needed.
+    const names = rare.filter((t) => writtenAsName(message, t));
+    const scored: Scored[] = [];
+    for (const turn of candidates.values()) {
+      const day = dateIn(new Date(turn.at), tz);
+      const date = dayMatch(dayWords(day, today), words);
+      // Exchanges earlier in this conversation are already in the transcript; only a day named
+      // in the message brings them back here.
+      const topic = turn.conversationId === conversationId ? 0 : overlap(turn, rare);
+      const strongTopic = topic >= 2 || (topic === 1 && overlap(turn, names) === 1);
+      if (date < 1 && !strongTopic) continue;
+      const age = daysBetween(day, today);
+      scored.push({ turn, date, topic, score: date + 0.8 * topic + 0.1 * Math.max(0, 1 - age / WINDOW_DAYS) });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    const kept = scored.slice(0, 10);
+    const dated = kept.filter((k) => k.date >= 1);
+
+    // The calendar, so the model reads which day is meant instead of working it out.
+    lines.push("", ...calendar(today, tz, recent));
+
+    if (kept.length) {
+      const byDay = groupBy(kept, (k) => isoDay(dateIn(new Date(k.turn.at), tz)));
+      for (const [day, group] of byDay) {
+        const n = group.length;
+        const datedHere = group.some((k) => k.date >= 1);
+        activity.push({
+          kind: "recall",
+          label: `${datedHere ? "Looked back at" : "Matched by topic:"} ${dayLabel(ymdOf(day))}: ${n} exchange${n === 1 ? "" : "s"}`,
+          ...(datedHere ? { days: [day] } : {}),
+        });
       }
     }
 
-    // A named day that found something is the answer to "which conversation": look-alike
-    // exchanges from other days on top of it could make the model anchor on the wrong one.
-    const dated = chosen.size > 0;
-    let topical = 0;
-    if (!dated) {
-      const rare = this.rareTerms(topicTerms(message), now);
-      if (rare.length) {
-        const need = Math.min(2, rare.length);
-        const matched = this.store.searchTurns(rare, 6, conversationId, now).filter((t) => overlap(t, rare) >= need);
-        keep(matched);
-        topical = matched.length;
-        if (matched.length) activity.push({ kind: "recall", label: `Matched ${matched.length} earlier exchange${matched.length === 1 ? "" : "s"} by topic`, detail: rare.join(", ") });
-      }
-    }
+    if (!kept.length) return { context: wrap(lines), activity, claims: [], readAhead: [], found: "none" };
 
-    if (!chosen.size && !refs.length) return { context: wrap(lines), activity, claims: [], readAhead: [], found: "none", strong: false };
-
-    const turns = [...chosen.values()].sort((a, b) => a.at.localeCompare(b.at)).slice(-12);
+    const turns = kept.map((k) => k.turn).sort((a, b) => a.at.localeCompare(b.at));
     const claims = groupBy(this.store.claimsFor(turns.map((t) => t.id)), (c) => c.turnId);
+    activity.push({
+      kind: "memory",
+      exchanges: turns.map((t) => ({ at: t.at, question: t.question })),
+      claims: turns.flatMap((t) => (claims.get(t.id) ?? []).map((c) => ({ subject: c.subject, value: c.value, at: c.observedAt }))),
+    });
+    lines.push("", "Earlier exchanges that match the message, by its day or its topic (oldest first). Use them only if the message is about them:");
+    for (const turn of turns) lines.push("", ...describeTurn(turn, conversationId, claims.get(turn.id) ?? [], tz));
 
-    // A named day with nothing on it is said plainly, whatever else turned up.
-    if (refs.length && !dated) {
-      lines.push("", "Memory: no earlier exchanges on those days. Do not invent one; say so plainly.");
-    }
-
-    if (turns.length) {
-      activity.push({
-        kind: "memory",
-        exchanges: turns.map((t) => ({ at: t.at, question: t.question })),
-        claims: turns.flatMap((t) => (claims.get(t.id) ?? []).map((c) => ({ subject: c.subject, value: c.value, at: c.observedAt }))),
-      });
-      lines.push(
-        "",
-        dated
-          ? "Earlier exchanges from those days (oldest first):"
-          : refs.length
-            ? "Exchanges from other days that share the message's topic; they may be what the person means, or not (oldest first):"
-            : "Earlier exchanges that share the message's topic (oldest first). Use them only if the message is about them:",
-      );
-      for (const turn of turns) lines.push("", ...describeTurn(turn, conversationId, claims.get(turn.id) ?? [], tz));
-    } else if (refs.length) {
-      lines.push("Ask for what you need to answer.");
-    }
-
-    const recent = this.store.conversations(12).filter((c) => c.id !== conversationId && c.createdAt <= now.toISOString());
-    if (recent.length && refs.length) {
-      lines.push("", "Recent conversations (for orientation):");
-      for (const c of recent) lines.push(`- ${shortDate(c.createdAt, tz)}: ${c.title}`);
-    }
-
-    const words = topicTerms(message);
-    const onTopic = dated ? turns.filter((t) => !words.length || overlap(t, words) > 0) : [];
+    const onTopic = dated.filter((k) => !topics.length || overlap(k.turn, topics) > 0);
     return {
       context: wrap(lines),
       activity,
       claims: [...claims.values()].flat(),
-      readAhead: onTopic.flatMap((t) => claims.get(t.id) ?? []),
-      found: dated ? "dated" : topical ? "topic" : "none",
-      strong: dated,
+      readAhead: onTopic.flatMap((k) => claims.get(k.turn.id) ?? []),
+      found: dated.length ? "dated" : "topic",
     };
   }
 
@@ -135,8 +128,8 @@ export class RecallService {
   private rareTerms(terms: string[], now: Date): string[] {
     const total = this.store.turnCount(now);
     if (!total) return [];
-    // In a short history every word looks rare; until there is enough of it, only a word seen once
-    // (a product name, usually) counts.
+    // In a short history every word looks rare; until there is enough of it, only a word seen
+    // once (a product name, usually) counts.
     const ceiling = total < 30 ? 1 : Math.floor(total * RARE_SHARE);
     return terms.filter((t) => {
       const df = this.store.documentFrequency(t, now);
@@ -145,15 +138,57 @@ export class RecallService {
   }
 }
 
-function dayActivity(ref: TimeRef, found: number, alternative: number, tz: string): Activity {
-  const count = (n: number) => (n ? `${n} exchange${n === 1 ? "" : "s"}` : "nothing");
-  const days = [ref, ...(ref.alternative ? [ref.alternative] : [])].map((span) => isoDay(dateIn(span.from, tz)));
-  return {
-    kind: "recall",
-    label: `Looked back at ${ref.label}: ${count(found)}`,
-    detail: ref.alternative ? `also ${ref.alternative.label}: ${count(alternative)}` : `"${ref.phrase}"`,
-    days,
-  };
+/**
+ * How strongly the message names this day, by the words it shares with it. A weekday, a month
+ * with its day number, or a relative phrase that holds for it ("yesterday", "last week") each
+ * count fully; a month alone a little; a bare number nothing ("5 tools" is not the 5th).
+ */
+function dayMatch(day: DayWords, words: Set<string>): number {
+  const has = (w: string) => words.has(w) || words.has(w.slice(0, 3));
+  let score = 0;
+  if (has(day.weekday)) score += 1;
+  const month = has(day.month);
+  if (month && words.has(day.day)) score += 1.2;
+  else if (month) score += 0.3;
+  if (day.relative.length && day.relative.every((w) => words.has(w))) score += 1;
+  return score;
+}
+
+/** The last few weeks as the person would see them on a wall calendar, with what was asked when. */
+function calendar(today: Ymd, tz: string, turns: TurnRecord[]): string[] {
+  const titles = groupBy(turns, (t) => isoDay(dateIn(new Date(t.at), tz)));
+  const monday = addDays(today, -((weekday(today) + 6) % 7));
+  const out = [`Calendar (today is ${dayLabel(today)}):`];
+  for (let w = CALENDAR_WEEKS - 1; w >= 0; w--) {
+    const start = addDays(monday, -7 * w);
+    const cells: string[] = [];
+    for (let d = 0; d < 7; d++) {
+      const day = addDays(start, d);
+      if (daysBetween(day, today) < 0) break;
+      const here = titles.get(isoDay(day)) ?? [];
+      const asked = [...new Set(here.map((t) => clip(t.question, 50)))].slice(0, 3);
+      cells.push(`${dayLabel(day).split(" ").slice(0, 3).join(" ")}${asked.length ? ` (${asked.map((q) => `"${q}"`).join("; ")})` : ""}`);
+    }
+    out.push(`- ${cells.join(" · ")}`);
+  }
+  return out;
+}
+
+const ymdOf = (iso: string): Ymd => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { y, m, d };
+};
+
+/** Did the person write this word with a capital somewhere other than at the start of a sentence? */
+function writtenAsName(message: string, term: string): boolean {
+  return [...message.matchAll(/[A-Za-z0-9][\w.'-]*/g)].some(
+    (m) => m[0].toLowerCase().startsWith(term) && /[A-Z]/.test(m[0]) && !/(?:^|[.!?]\s+)$/.test(message.slice(0, m.index)),
+  );
+}
+
+/** Words as written, kept whole ("monday.com" is one word, not Monday); ordinals as numbers. */
+function tokens(text: string): string[] {
+  return (text.toLowerCase().match(/[a-z0-9]+(?:[.'-][a-z0-9]+)*/g) ?? []).map((t) => t.replace(/^(\d+)(?:st|nd|rd|th)$/, "$1"));
 }
 
 function describeTurn(turn: TurnRecord, currentConversation: string, claims: Claim[], tz: string): string[] {

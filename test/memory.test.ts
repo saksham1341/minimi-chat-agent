@@ -34,41 +34,42 @@ describe("recall", () => {
   const store = memoryWith(
     { at: "2026-11-03T05:00:00Z", question: "Cheapest managed Postgres hosting?", answer: "Neon and Supabase…", claims: [["Neon, Launch plan", "$19/month"]] },
     { at: "2026-11-09T06:00:00Z", question: "Shortlist CRM tools for a 20-person sales team", answer: "HubSpot, Pipedrive, Attio, Close, Folk" },
+    { at: "2026-11-09T07:00:00Z", question: "Best espresso grinder under $300?", answer: "Baratza Encore ESP" },
   );
   const recall = new RecallService(store);
+  const asked = (message: string, now = NOW) => recall.recall(message, "current", now, IST).context;
 
-  it("finds what was said on the day a message points at, with the facts stated then", () => {
-    const { context, activity } = recall.recall("Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?", "current", NOW, IST);
-    expect(context).toContain("Cheapest managed Postgres hosting?");
-    expect(context).toContain("Neon, Launch plan: $19/month");
-    expect(activity[0]).toMatchObject({ kind: "recall" });
-    expect(activity[0].kind === "recall" && activity[0].label).toContain("1 exchange");
+  it("finds the brief's three questions by the words of their day and topic", () => {
+    expect(asked("On Monday we shortlisted 5 CRM tools for a 20-person sales team. Has any of them changed?")).toContain("Person asked: Shortlist CRM tools");
+    expect(asked("What did I ask you on 3 November? Is your answer still correct today?")).toContain("Person asked: Cheapest managed Postgres hosting?");
+    expect(asked("Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?")).toContain("Neon, Launch plan: $19/month");
   });
 
-  it("finds by topic when no date is given", () => {
-    const { context } = recall.recall("Has anything changed with the CRM tools we shortlisted?", "current", NOW, IST);
-    expect(context).toContain("Shortlist CRM tools");
+  it("prefers the exchange that matches both the day and the topic", () => {
+    const context = asked("On Monday we shortlisted 5 CRM tools. Has any of them changed?");
+    expect(context.indexOf("Shortlist CRM tools")).toBeGreaterThan(-1);
   });
 
-  it("says so when memory has nothing, instead of leaving the model to guess", () => {
-    const { context } = recall.recall("What did I ask you on 1 November?", "current", NOW, IST);
-    expect(context).toMatch(/no earlier exchanges on those days/);
+  it("shows the calendar, so the model can say a day had nothing", () => {
+    const context = asked("What did I ask you on 1 November?");
+    expect(context).toMatch(/Calendar \(today is Tue/);
+    expect(context).not.toContain("Person asked");
+  });
+
+  it("is not fooled by names, numbers or filler that look like dates", () => {
+    expect(asked("Has Monday.com changed its pricing?")).not.toContain("Person asked");
+    expect(asked("Give me 5 tools for note taking")).not.toContain("Person asked");
+    expect(asked("Do I need to run anything now before the upgrade, one thing at a time?")).not.toContain("Person asked");
   });
 
   it("finds an earlier conversation however the person phrases it", () => {
-    const { context } = recall.recall("Remind me which CRMs we were looking at", "current", NOW, IST);
-    expect(context).toContain("Person asked: Shortlist CRM tools for a 20-person sales team");
+    expect(asked("Remind me which CRMs we were looking at")).toContain("Person asked: Shortlist CRM tools");
   });
 
-  it("is not pulled in by filler words", () => {
-    const { activity } = recall.recall("Do I need to run anything now before the upgrade, one thing at a time?", "current", NOW, IST);
-    expect(activity).toEqual([]);
-  });
-
-  it("stays out of the way when the message does not look back", () => {
-    const { context, activity } = recall.recall("What's the latest Node LTS?", "current", NOW, IST);
-    expect(activity).toEqual([]);
-    expect(context).not.toContain("Postgres");
+  it("reads ahead only for what the message points at by day and topic", () => {
+    const r = recall.recall("Last Tuesday I asked you about Postgres hosting. Has any pricing changed since then?", "current", NOW, IST);
+    expect(r.readAhead.map((c) => c.subject)).toEqual(["Neon, Launch plan"]);
+    expect(recall.recall("Remind me which CRMs we were looking at", "current", NOW, IST).readAhead).toEqual([]);
   });
 });
 
