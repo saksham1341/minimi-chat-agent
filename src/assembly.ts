@@ -5,10 +5,10 @@
  * Which models and which search provider exist is decided here, from which keys are set, and the
  * UI's model picker is simply what this produced.
  */
-import { anthropicModels } from "./agents/models/anthropic.ts";
-import { bedrockClient, bedrockModels, SONNET_4_5 } from "./agents/models/bedrock.ts";
+import { anthropicModels } from "./adapters/models/anthropic.ts";
+import { bedrockClient, bedrockModels, SONNET_4_5 } from "./adapters/models/bedrock.ts";
 import type { ChatModel } from "./agents/ports.ts";
-import { McpToolSurface } from "./agents/mcp-tools.ts";
+import { McpToolSurface } from "./adapters/tools/mcp.ts";
 import { AbsentClaimExtractor, AnthropicClaimExtractor } from "./adapters/claims/anthropic.ts";
 import { BedrockClaimExtractor } from "./adapters/claims/bedrock.ts";
 import type { ClaimExtractor } from "./ports/claims.ts";

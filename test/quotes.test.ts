@@ -49,4 +49,8 @@ describe("quoted citations", () => {
     expect(bareCitations('Extra branches cost $1.50 a month [S1 "$1.50/branch-month"].')).toEqual([]);
     expect(bareCitations('Supported by two pages [S1 "billed monthly"][S2 "billed monthly too"].')).toEqual([]);
   });
+
+  it("treats a line break inside a quote as a space", () => {
+    expect(citationsIn('x [S1 "Starter — $20/seat/month,\\nbilled monthly"]').map((c) => quoteFound(c.quote!, page))).toEqual([true]);
+  });
 });

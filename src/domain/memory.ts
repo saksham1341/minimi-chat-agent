@@ -18,14 +18,20 @@ export interface Source {
   snippet?: string;
   /** Read live for this answer (`fresh`), not from the search provider's cache. */
   live?: boolean;
-  /** Found by a search limited to its own site (`domains`): the vendor's page, not a roundup. */
-  firstParty?: boolean;
 }
 
 /** One thing the agent did on the way to an answer, shown to the person as it happens. */
 export type Activity =
   | { kind: "recall"; label: string; detail?: string; /** Local days looked at, YYYY-MM-DD. */ days?: string[] }
-  | { kind: "search"; id: string; query: string; since?: string; domains?: string[]; fresh?: boolean; results?: number; failed?: string; hits?: string[] }
+  | {
+      kind: "search"; id: string; query: string; since?: string; domains?: string[]; fresh?: boolean; results?: number; failed?: string; hits?: string[];
+      /** Started by the harness before the model asked (a read-ahead). */
+      ahead?: boolean;
+      /** Answered from a read-ahead, so it came back at once. */
+      reused?: boolean;
+      /** Still being written by the model: the query so far. */
+      drafting?: boolean;
+    }
   /** What recall put in front of the model, for the canvas: the exchanges and the facts stated then. */
   | { kind: "memory"; exchanges: { at: string; question: string }[]; claims: { subject: string; value: string; at: string }[] };
 

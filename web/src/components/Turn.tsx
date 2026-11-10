@@ -23,7 +23,7 @@ export function Turn(props: {
   const { turn, last, onPick, modelLabel, canvas, focused, onFocus } = props;
   const live = turn.status === "streaming";
   const time = new Date(turn.at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  const searches = turn.activity.filter((a) => a.kind === "search").length;
+  const searches = turn.activity.filter((a) => a.kind === "search" && (!a.ahead || a.reused)).length;
   const recalled = turn.activity.some((a) => a.kind === "recall");
   const hasWork = searches > 0 || recalled || turn.shape === "comparison" || turn.shape === "changes";
   const card = turn.shape !== "reply" && turn.answer !== undefined;
@@ -36,6 +36,7 @@ export function Turn(props: {
       </div>
       <div className="answer">
         {live && <Status turn={turn} onOpen={onFocus} />}
+        {live && !turn.text && turn.answer === undefined && <Skeleton />}
         {turn.text && <Prose text={turn.text} sources={turn.sources} />}
         {card &&
           (canvas && turn.shape !== "choices" ? (
@@ -72,19 +73,38 @@ const STEP_TEXT = { remember: "Remembering", search: "Searching", read: "Reading
 function Status({ turn, onOpen }: { turn: ViewTurn; onOpen: () => void }) {
   const steps = phases(turn);
   const step = (["write", "read", "search", "remember"] as const).find((s) => steps[s] === "active");
-  const pending = turn.activity.filter((a) => a.kind === "search" && a.results === undefined && !a.failed).length;
-  const label = !step
-    ? "Thinking"
-    : step === "search"
-      ? `Searching${pending > 1 ? ` ${pending} at once` : ""}`
-      : step === "read"
+  const lanes = turn.activity.filter((a) => a.kind === "search");
+  const own = lanes.filter((a) => a.kind === "search" && !a.ahead && a.results === undefined && !a.failed).length;
+  const ahead = lanes.filter((a) => a.kind === "search" && a.ahead && a.results === undefined && !a.failed).length;
+  const label =
+    step === "search" && own
+      ? `Searching${own > 1 ? ` ${own} at once` : ""}`
+      : step === "read" || (step === "search" && !own && turn.sources.length)
         ? `Reading ${turn.sources.length} sources`
-        : STEP_TEXT[step];
+        : step === "write"
+          ? "Writing"
+          : ahead
+            ? "Reading ahead"
+            : "Thinking";
   if (step === "write" && turn.text) return null; // the answer itself is now the progress
+  // The model's own words about what it is doing, as soon as it says them.
+  const note = turn.notes.at(-1);
   return (
     <button className="status" onClick={onOpen}>
       <span className="status-dot" aria-hidden />
-      {label}
+      <span className="status-label">{label}</span>
+      {note && <span className="status-note">{note.length > 120 ? `${note.slice(0, 117)}…` : note}</span>}
     </button>
+  );
+}
+
+/** The shape of an answer, before there is one: something on screen from the first frame. */
+function Skeleton() {
+  return (
+    <div className="skeleton" aria-hidden>
+      <span style={{ width: "92%" }} />
+      <span style={{ width: "86%" }} />
+      <span style={{ width: "58%" }} />
+    </div>
   );
 }

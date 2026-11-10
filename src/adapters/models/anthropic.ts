@@ -3,8 +3,8 @@
  * with an effort, server-side refusal fallbacks, and tool input streamed as it is written.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import type { Said } from "../conversation.ts";
-import type { ChatModel, ModelDelta, ModelInfo, ModelRequest } from "../ports.ts";
+import type { Said } from "../../agents/conversation.ts";
+import type { ChatModel, ModelDelta, ModelInfo, ModelRequest } from "../../agents/ports.ts";
 import { readTurn, toolsToWire, toWire, withJsonRetry } from "./claude-wire.ts";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";

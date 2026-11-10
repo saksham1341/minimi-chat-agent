@@ -107,7 +107,7 @@ export class SqliteMemory implements MemoryStore {
     ).map(toTurn);
   }
 
-  searchTurns(terms: string[], limit: number, excludeConversation?: string) {
+  searchTurns(terms: string[], limit: number, excludeConversation: string | undefined, before: Date) {
     const clean = terms.map((t) => t.replace(/"/g, "")).filter(Boolean);
     if (!clean.length) return [];
     // Prefix match on a crude stem, so "CRMs" finds "CRM" and "pricing" finds "price"-less variants.
@@ -115,10 +115,23 @@ export class SqliteMemory implements MemoryStore {
     const rows = this.db
       .prepare(
         `select turns.* from turns_fts join turns on turns.id = turns_fts.turn_id
-         where turns_fts match ? and turns.conversation_id != ? order by bm25(turns_fts) limit ?`,
+         where turns_fts match ? and turns.conversation_id != ? and turns.at <= ? order by bm25(turns_fts) limit ?`,
       )
-      .all(match, excludeConversation ?? "", limit) as Row[];
+      .all(match, excludeConversation ?? "", before.toISOString(), limit) as Row[];
     return rows.map(toTurn);
+  }
+
+  documentFrequency(term: string, before: Date): number {
+    const clean = term.replace(/"/g, "");
+    if (!clean) return 0;
+    const row = this.db
+      .prepare(`select count(*) as n from turns_fts join turns on turns.id = turns_fts.turn_id where turns_fts match ? and turns.at <= ?`)
+      .get(`"${stem(clean)}"*`, before.toISOString()) as Row;
+    return row.n as number;
+  }
+
+  turnCount(before: Date): number {
+    return (this.db.prepare("select count(*) as n from turns where at <= ?").get(before.toISOString()) as Row).n as number;
   }
 
   saveClaims(turn: TurnRecord, claims: ClaimDraft[]) {
@@ -134,6 +147,13 @@ export class SqliteMemory implements MemoryStore {
       const text = texts.get(source.id);
       if (text) insert.run(turn.id, source.id, source.url, text, turn.at);
     }
+  }
+
+  snapshotsFor(conversationId: string): Map<string, string> {
+    const rows = this.db
+      .prepare(`select snapshots.source_id as id, snapshots.text as text from snapshots join turns on turns.id = snapshots.turn_id where turns.conversation_id = ? order by turns.at`)
+      .all(conversationId) as Row[];
+    return new Map(rows.map((r) => [r.id as string, r.text as string]));
   }
 
   claimsFor(turnIds: string[]): Claim[] {

@@ -8,8 +8,8 @@
  * search time, which is what makes a real boundary affordable here.
  */
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { ToolCall, ToolResult } from "./conversation.ts";
-import type { ToolSpec, ToolSurface } from "./ports.ts";
+import type { ToolCall, ToolResult } from "../../agents/conversation.ts";
+import type { ToolSpec, ToolSurface } from "../../agents/ports.ts";
 
 export class McpToolSurface implements ToolSurface {
   private client?: Promise<Client>;

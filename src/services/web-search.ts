@@ -83,16 +83,44 @@ export interface SearchPayload {
   results: SearchHit[];
 }
 
+export interface CitedSearchOptions {
+  /** Searches already under way for this turn; a matching call is answered from them. */
+  readAhead?: { take(args: Partial<SearchInput>): Promise<ToolResult> | undefined };
+  /**
+   * Sources and snapshots from earlier turns of the same conversation. Numbering carries on from
+   * them, so a follow-up can cite S5 from the last answer and have the quote checked.
+   */
+  prior?: { sources: Source[]; snapshots: ReadonlyMap<string, string> };
+}
+
 export class CitedSearch implements ToolSurface {
+  /** Every source this conversation knows, earlier turns' first. */
   readonly sources: Source[] = [];
   /** The exact text each source showed the model: what its quotes are checked against. */
   readonly snapshots = new Map<string, string>();
   private readonly byUrl = new Map<string, Source>();
+  private readonly foundNow = new Set<string>();
+  private next = 1;
 
   constructor(
     private readonly inner: ToolSurface,
     private readonly report: (activity: Activity, sources: Source[]) => void,
-  ) {}
+    private readonly options: CitedSearchOptions = {},
+  ) {
+    for (const source of options.prior?.sources ?? []) {
+      if (this.sources.some((s) => s.id === source.id)) continue;
+      this.sources.push(source);
+      this.byUrl.set(source.url, source);
+      this.next = Math.max(this.next, Number(source.id.slice(1)) + 1);
+    }
+    for (const [id, text] of options.prior?.snapshots ?? []) this.snapshots.set(id, text);
+  }
+
+  /** The sources an answer should keep: those found this turn, and earlier ones it cites. */
+  sourcesFor(...texts: string[]): Source[] {
+    const cited = new Set(texts.join(" ").match(/S\d+/g) ?? []);
+    return this.sources.filter((s) => this.foundNow.has(s.id) || cited.has(s.id));
+  }
 
   offered(): ToolSpec[] | Promise<ToolSpec[]> {
     return this.inner.offered();
@@ -108,7 +136,12 @@ export class CitedSearch implements ToolSurface {
 
     let result: ToolResult;
     try {
-      result = await this.inner.run(call, signal);
+      const ahead = this.options.readAhead?.take(args);
+      let reused = false;
+      if (ahead) {
+        result = await ahead.then((r) => ((reused = true), { ...r, callId: call.id }), () => this.inner.run(call, signal));
+      } else result = await this.inner.run(call, signal);
+      if (reused) activity.reused = true;
     } catch (error) {
       result = { callId: call.id, name: call.name, content: `Search failed: ${(error as Error).message}`, failed: true };
     }
@@ -155,26 +188,25 @@ export class CitedSearch implements ToolSurface {
   private number(hit: SearchHit, args: Partial<SearchInput>): Source {
     const domain = domainOf(hit.url);
     const live = args.fresh === true;
-    const firstParty = !!args.domains?.some((d) => domain === d.replace(/^www\./, "") || domain.endsWith(`.${d.replace(/^www\./, "")}`));
     const known = this.byUrl.get(hit.url);
+    if (known) this.foundNow.add(known.id);
     if (known) {
       // Seen before from the cache or a general search; a later live or site-limited read upgrades it.
       if (live) known.live = true;
-      if (firstParty) known.firstParty = true;
       return known;
     }
     const source: Source = {
-      id: `S${this.sources.length + 1}`,
+      id: `S${this.next++}`,
       url: hit.url,
       title: hit.title,
       domain: domainOf(hit.url),
       ...(hit.published ? { published: hit.published } : {}),
       ...(snippetOf(hit.excerpt) ? { snippet: snippetOf(hit.excerpt) } : {}),
       ...(live ? { live } : {}),
-      ...(firstParty ? { firstParty } : {}),
     };
     this.sources.push(source);
     this.byUrl.set(hit.url, source);
+    this.foundNow.add(source.id);
     return source;
   }
 }

@@ -26,7 +26,7 @@ import { asked } from "./conversation.ts";
 import type { ChatModel, ModelDelta, ToolSpec, ToolSurface } from "./ports.ts";
 
 export const ENDING_PREFIX = "answer_";
-export const DEFAULT_MAX_ROUNDS = 3;
+export const DEFAULT_MAX_ROUNDS = 2;
 /** Rounds allowed past the ceiling for fixing an invalid answer. After that the turn ends regardless. */
 const GRACE_ROUNDS = 2;
 /** Tool-call markup written as text: the model meant to call a tool and wrote the call instead. */

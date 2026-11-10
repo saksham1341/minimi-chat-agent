@@ -19,8 +19,8 @@
  * keys are passed explicitly.
  */
 import { AnthropicBedrock } from "@anthropic-ai/bedrock-sdk";
-import type { Said } from "../conversation.ts";
-import type { ChatModel, ModelDelta, ModelInfo, ModelRequest } from "../ports.ts";
+import type { Said } from "../../agents/conversation.ts";
+import type { ChatModel, ModelDelta, ModelInfo, ModelRequest } from "../../agents/ports.ts";
 import { readTurn, toolsToWire, toWire, withJsonRetry } from "./claude-wire.ts";
 
 export const PROVIDER = "bedrock";

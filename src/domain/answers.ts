@@ -12,6 +12,7 @@
 import { z } from "zod";
 import type { OutputShape } from "../agents/loop.ts";
 import type { Source } from "./memory.ts";
+import { isVendorSite } from "./recheck.ts";
 import { describeProblems, quoteProblems, type QuoteProblem } from "./quotes.ts";
 
 const sourceIds = z
@@ -109,12 +110,18 @@ function shape(name: string, schema: z.ZodType, description: string, check?: Che
  * either undated (a live page: pricing pages change in place) or dated on or after the baseline.
  * A page from before the baseline can only show what was already true then.
  */
+/**
+ * Does `source` show what is true now about `subject`? Dated on or after the baseline, or undated
+ * and either read live for this answer or on the vendor's own site (hubspot.com for HubSpot). An
+ * undated page anywhere else is a roundup of unknown age.
+ */
+export function showsNow(subject: string, source: Source, since: string): boolean {
+  return source.published ? source.published >= since : !!source.live || isVendorSite(subject, source.domain);
+}
+
 export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Source[]): string | null {
-  // Evidence of what is true now: dated on or after the baseline, or an undated page that was read
-  // live or found on its own site. An undated page from anywhere else is a roundup of unknown age.
-  const shows = (s: Source) => (s.published ? s.published >= changes.since : !!(s.live || s.firstParty));
   const describe = (s: Source) =>
-    `${s.id} (${s.domain}, ${s.published ? `published ${s.published}` : "undated, not read live or on its own site"})`;
+    `${s.id} (${s.domain}, ${s.published ? `published ${s.published}` : "undated, not read live, not the vendor's own site"})`;
   const problems: string[] = [];
   for (const item of changes.items) {
     if (item.status !== "changed" && item.status !== "corrected") continue;
@@ -123,12 +130,12 @@ export function evidenceProblem(changes: z.infer<typeof Changes>, sources: Sourc
       continue;
     }
     const cited = item.sources.map((ref) => sources.find((s) => s.id === refId(ref))).filter((s): s is Source => !!s);
-    if (cited.length && !cited.some(shows)) {
+    if (cited.length && !cited.some((s) => showsNow(item.subject, s, changes.since))) {
       problems.push(`"${item.subject}" is marked ${item.status}, but none of its sources shows what is true now: ${cited.map(describe).join(", ")}`);
     }
   }
   return problems.length
-    ? `${problems.join("; ")}. Overturning what was said needs the vendor's own current page (search it with \`domains\` and \`fresh: true\`) or a source published on or after ${changes.since}. Re-check, or mark it unchanged or unverified, then call answer_changes again.`
+    ? `${problems.join("; ")}. Overturning what was said needs the vendor's own current page or a source published on or after ${changes.since}. Re-check, or mark it unchanged or unverified, then call answer_changes again.`
     : null;
 }
 
@@ -145,25 +152,17 @@ export function collectRefs(answer: unknown): SourceRef[] {
 }
 
 /** The answer shapes for one turn: its numbered results and their snapshots feed the checks. */
-export function answerShapes(sources: () => Source[] = () => [], snapshots?: () => ReadonlyMap<string, string>): OutputShape[] {
-  // A failing quote in a card goes back once, like prose; after that the card is shown with the
-  // quote marked unverified rather than bounced until the round budget runs out.
-  let quoteBounces = 0;
-  const quotesHold = (answer: unknown) => {
-    if (!snapshots || quoteBounces >= 1) return null;
-    // Same proportion as prose: a couple of misses are shown flagged; more means a sloppy card.
-    const problems = cardQuoteProblems(answer, snapshots());
-    if (problems.length <= 2) return null;
-    quoteBounces++;
-    return describeProblems(problems).replace("give the whole answer again", "call the answer shape again");
-  };
+export function answerShapes(sources: () => Source[] = () => []): OutputShape[] {
+  // Quotes in a card are never a reason to send it back: rewriting a card costs the person 15-30
+  // seconds, and a missed quote is shown flagged anyway. A wrong verdict is different; the evidence
+  // rule below does send it back.
   return [
     shape(
       "comparison",
       Comparison,
       "Answer with a comparison table, ending the turn. Use when the person is weighing three or more options on the " +
-        "same attributes (tools, plans, providers). Do the searches first; every cell should be backed by a source.",
-      ((value: z.infer<typeof Comparison>) => quotesHold(value)) as Check,
+        "same attributes (tools, plans, providers). Search every option in one round (the searches run in parallel), " +
+        "then answer; every cell should be backed by a source.",
     ),
     shape(
       "changes",
@@ -172,7 +171,7 @@ export function answerShapes(sources: () => Source[] = () => [], snapshots?: () 
         "something you told them before is still true, or what changed since a date. Cover every option from the earlier " +
         "answer, one item per option with all its facts (not one item per attribute); leave `note` empty when nothing changed; " +
         "mark 'unverified' honestly when the search could not confirm it either way.",
-      ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources()) ?? quotesHold(value)) as Check,
+      ((value: z.infer<typeof Changes>) => evidenceProblem(value, sources())) as Check,
     ),
     shape(
       "choices",

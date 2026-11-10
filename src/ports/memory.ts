@@ -16,11 +16,16 @@ export interface MemoryStore {
   turns(conversationId: string): TurnRecord[];
   /** Turns asked within [from, to), across all conversations, oldest first. */
   turnsBetween(from: Date, to: Date, limit: number): TurnRecord[];
-  /** Full-text match over questions and answers, best first. */
-  searchTurns(terms: string[], limit: number, excludeConversation?: string): TurnRecord[];
+  /** Full-text match over questions and answers asked before `before`, best first. */
+  searchTurns(terms: string[], limit: number, excludeConversation: string | undefined, before: Date): TurnRecord[];
+  /** How many turns before `before` contain the term: how much a match on it says. */
+  documentFrequency(term: string, before: Date): number;
+  turnCount(before: Date): number;
 
   saveClaims(turn: TurnRecord, claims: ClaimDraft[]): void;
   /** The exact text each source showed the model for this turn: the evidence as it stood that day. */
   saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>): void;
+  /** Every snapshot kept in a conversation, by source id (later turns win). */
+  snapshotsFor(conversationId: string): Map<string, string>;
   claimsFor(turnIds: string[]): Claim[];
 }

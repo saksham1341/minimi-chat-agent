@@ -162,6 +162,7 @@ export function resolveTimeRefs(text: string, now: Date, tz: string): TimeRef[] 
     return days(saturday, 2, tz, "the weekend");
   });
   take(/\bthe\s+other\s+day\b/, () => days(addDays(today, -6), 5, tz, "the other day"));
+  take(/\b(?:about\s+|around\s+|roughly\s+)?(?:a|one)\s+week\s+(?:or\s+so\s+)?(?:ago|back)\b/, () => days(addDays(today, -10), 7, tz, "about a week ago"));
 
   take(/\b(?:a\s+)?(?:few|couple(?:\s+of)?)\s+days\s+ago\b/, () => days(addDays(today, -6), 5, tz, "a few days ago"));
   take(/\b(\d+|an?|one|two|three|four|five|six|seven|eight|nine|ten)\s+(day|week|month)s?\s+ago\b/, (m) => {

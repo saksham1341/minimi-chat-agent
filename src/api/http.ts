@@ -63,6 +63,8 @@ function meta(app: App) {
 }
 
 async function chat(app: App, req: IncomingMessage, res: ServerResponse) {
+  // JSON only: a form post from some other web page cannot spend the keys or write to memory.
+  if (!String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, { error: "expected application/json" }, 415);
   const body = JSON.parse((await readBody(req)) || "{}") as { conversationId?: string; message?: string; modelId?: string; timeZone?: string };
   const controller = new AbortController();
   let finished = false;

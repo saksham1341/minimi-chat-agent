@@ -1,16 +1,20 @@
 /**
- * Planning a re-check from the ledger, before the model is called.
+ * What to read ahead when earlier facts come back from memory.
  *
- * "Is your answer still correct?" has an obvious first move: re-read the pages the facts came
- * from. Leaving that to the model costs a full model round (reading the question, deciding to
- * search, writing the calls) before any page is fetched. The ledger already knows which page each
- * fact came from, so the harness fires those reads itself, in parallel, the moment the question
- * arrives, and the model starts with them in hand. What the pages don't cover (announcements since
- * the date) is still the model's call.
+ * If the person is asking whether an earlier answer still holds, the first thing the model will
+ * want is the vendors' own pages as they read now, and what they announced since. Those reads can
+ * start before the model has decided anything: if it then asks for them they are already there,
+ * and if it does not (the memory was not what the question was about) they are dropped. This is
+ * speculation, not a decision: the model still chooses what to search.
+ *
+ * Planned per vendor, not per source site: two vendors whose facts both came from an aggregator
+ * are two reads, of each vendor's own page.
  */
 import type { Claim } from "./memory.ts";
 
-export interface PlannedSearch {
+export interface PlannedRead {
+  vendor: string;
+  kind: "page" | "news";
   query: string;
   domains?: string[];
   fresh?: true;
@@ -19,32 +23,46 @@ export interface PlannedSearch {
 }
 
 const PRICE = /\$|€|£|₹|\bpric|\bplan\b|\bplans\b|\btier|\bseat|\/mo|per month|free/i;
-const MAX_SITES = 6;
+const MAX_VENDORS = 6;
 
-export function planRechecks(claims: Claim[]): PlannedSearch[] {
-  const bySite = new Map<string, Claim[]>();
+export function planReadAhead(claims: Claim[]): PlannedRead[] {
+  const byVendor = new Map<string, Claim[]>();
   for (const claim of claims) {
-    const site = siteOf(claim.sourceUrl);
-    if (site) bySite.set(site, [...(bySite.get(site) ?? []), claim]);
+    const vendor = vendorOf(claim.subject);
+    if (vendor) byVendor.set(vendor, [...(byVendor.get(vendor) ?? []), claim]);
   }
-  // The day the facts were stated: what "since" means for the news half of the question.
+  // The day the facts were stated: what "since" means for the news half.
   const baseline = claims.map((c) => c.observedAt.slice(0, 10)).filter(Boolean).sort()[0];
-  return [...bySite.entries()].slice(0, MAX_SITES).flatMap(([site, facts]) => {
-    const subject = nameOf(facts[0].subject);
+  return [...byVendor.entries()].slice(0, MAX_VENDORS).flatMap(([vendor, facts]) => {
     const aboutPrice = facts.some((f) => PRICE.test(`${f.subject} ${f.value}`));
-    const reread: PlannedSearch = { query: aboutPrice ? `${subject} pricing plans` : subject, domains: [site], fresh: true, max_results: 3 };
-    // "…or shipped something big since?": the live page shows the present, not what happened.
-    const news: PlannedSearch[] = baseline ? [{ query: `${subject} new features announcement launch`, since: baseline, max_results: 3 }] : [];
-    return [reread, ...news];
+    // The vendor's own site, if an earlier source was on it; otherwise a live search for its page.
+    const own = facts.map((f) => siteOf(f.sourceUrl)).find((site) => site && isVendorSite(vendor, site));
+    const page: PlannedRead = {
+      vendor, kind: "page", query: aboutPrice ? `${vendor} pricing plans` : vendor, fresh: true, max_results: 3, ...(own ? { domains: [own] } : {}),
+    };
+    const news: PlannedRead[] = baseline ? [{ vendor, kind: "news", query: `${vendor} new features announcement launch`, since: baseline, max_results: 3 }] : [];
+    return [page, ...news];
   });
 }
 
-/** "HubSpot Sales Hub, Price/seat/month" or "Neon pricing" → "HubSpot Sales Hub" / "Neon". */
-function nameOf(subject: string): string {
-  return subject.split(",")[0].replace(/\b(?:pricing|price|prices|plans?|tiers?)\b/gi, "").replace(/\s+/g, " ").trim() || subject;
+/** "HubSpot Sales Hub, Price/seat/month" → "HubSpot Sales Hub". */
+export function vendorOf(subject: string): string {
+  return subject.split(",")[0].replace(/\b(?:pricing|price|prices|plans?|tiers?)\b/gi, "").replace(/\s+/g, " ").trim();
 }
 
-function siteOf(url?: string): string | undefined {
+/**
+ * Is `domain` the vendor's own site? Its name has to be in it: hubspot.com for "HubSpot Sales
+ * Hub", neon.tech for "Neon". An aggregator (g2.com, capterra.com) never is.
+ */
+export function isVendorSite(subject: string, domain: string): boolean {
+  const host = domain.toLowerCase().replace(/^www\./, "");
+  const label = host.split(".").slice(-2)[0] ?? host;
+  const words = vendorOf(subject).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const joined = words.join("");
+  return words.some((w) => label === w || label.startsWith(w) || host.includes(`${w}.`)) || (joined.length >= 4 && label.includes(joined));
+}
+
+export function siteOf(url?: string): string | undefined {
   if (!url) return undefined;
   try {
     return new URL(url).hostname.replace(/^www\./, "");

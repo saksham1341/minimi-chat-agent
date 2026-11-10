@@ -3,13 +3,14 @@ import { SqliteMemory } from "../src/adapters/store/sqlite.ts";
 import type { TurnRecord } from "../src/domain/memory.ts";
 import { RecallService } from "../src/services/recall.ts";
 import { CitedSearch, SEARCH_TOOL, SearchService } from "../src/services/web-search.ts";
-import { McpToolSurface } from "../src/agents/mcp-tools.ts";
+import { McpToolSurface } from "../src/adapters/tools/mcp.ts";
 import type { ToolSurface } from "../src/agents/ports.ts";
 import { handleMcp } from "../src/api/mcp.ts";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { evidenceProblem } from "../src/domain/answers.ts";
-import { planRechecks } from "../src/domain/recheck.ts";
+import { isVendorSite, planReadAhead } from "../src/domain/recheck.ts";
+import { ReadAhead } from "../src/services/read-ahead.ts";
 import type { SearchProvider } from "../src/ports/search.ts";
 
 const IST = "Asia/Kolkata";
@@ -51,12 +52,17 @@ describe("recall", () => {
 
   it("says so when memory has nothing, instead of leaving the model to guess", () => {
     const { context } = recall.recall("What did I ask you on 1 November?", "current", NOW, IST);
-    expect(context).toMatch(/no earlier exchanges match/);
+    expect(context).toMatch(/no earlier exchanges on those days/);
   });
 
   it("finds an earlier conversation however the person phrases it", () => {
     const { context } = recall.recall("Remind me which CRMs we were looking at", "current", NOW, IST);
     expect(context).toContain("Person asked: Shortlist CRM tools for a 20-person sales team");
+  });
+
+  it("is not pulled in by filler words", () => {
+    const { activity } = recall.recall("Do I need to run anything now before the upgrade, one thing at a time?", "current", NOW, IST);
+    expect(activity).toEqual([]);
   });
 
   it("stays out of the way when the message does not look back", () => {
@@ -169,20 +175,38 @@ describe("the evidence rule for a 'changed' verdict", () => {
   });
 });
 
-describe("planning a re-check from the ledger", () => {
+describe("reading ahead from the ledger", () => {
   const claim = (subject: string, value: string, sourceUrl?: string) => ({ id: "", turnId: "", conversationId: "", subject, value, sourceUrl, observedAt: "2026-11-09T06:00:00.000Z" });
 
-  it("re-reads each site the stated facts came from, live, once per site", () => {
-    const plan = planRechecks([
-      claim("HubSpot Sales Hub, Price/seat/month", "$20 (Starter)", "https://www.hubspot.com/pricing/sales"),
-      claim("HubSpot Sales Hub, Free tier", "Yes, 2 users", "https://www.hubspot.com/pricing/sales"),
+  it("plans one live page read and one 'since' news search per vendor, not per source site", () => {
+    const plan = planReadAhead([
+      claim("HubSpot Sales Hub, Price/seat/month", "$20 (Starter)", "https://www.g2.com/products/hubspot/pricing"),
+      claim("Zoho CRM, Price/seat/month", "$14 (Standard)", "https://www.g2.com/products/zoho-crm/pricing"),
       claim("Pipedrive, Price/seat/month", "$14 (Lite)", "https://www.pipedrive.com/en/pricing"),
-      claim("Some fact", "no source"),
     ]);
-    const rereads = plan.filter((p) => p.fresh);
-    expect(rereads.map((p) => p.domains?.[0])).toEqual(["hubspot.com", "pipedrive.com"]);
-    expect(rereads[0].query).toBe("HubSpot Sales Hub pricing plans");
-    // and the news half, since the day the facts were stated
-    expect(plan.filter((p) => p.since).map((p) => p.since)).toEqual(["2026-11-09", "2026-11-09"]);
+    expect(plan.filter((p) => p.kind === "page").map((p) => p.vendor)).toEqual(["HubSpot Sales Hub", "Zoho CRM", "Pipedrive"]);
+    // An aggregator is never treated as the vendor's own site; the vendor's own domain is.
+    expect(plan.find((p) => p.vendor === "HubSpot Sales Hub" && p.kind === "page")?.domains).toBeUndefined();
+    expect(plan.find((p) => p.vendor === "Pipedrive" && p.kind === "page")?.domains).toEqual(["pipedrive.com"]);
+    expect(plan.filter((p) => p.kind === "news").every((p) => p.since === "2026-11-09")).toBe(true);
+  });
+
+  it("knows a vendor's own site from an aggregator", () => {
+    expect(isVendorSite("HubSpot Sales Hub", "hubspot.com")).toBe(true);
+    expect(isVendorSite("Neon", "neon.tech")).toBe(true);
+    expect(isVendorSite("HubSpot Sales Hub", "g2.com")).toBe(false);
+    expect(isVendorSite("Zoho CRM", "capterra.com")).toBe(false);
+  });
+
+  it("hands a read already under way to the search that asks for it, once it names the vendor", async () => {
+    let calls = 0;
+    const inner = { offered: () => [], run: async (c: { id: string; name: string }) => (calls++, { callId: c.id, name: c.name, content: JSON.stringify({ results: [] }), failed: false }) };
+    const ahead = new ReadAhead(inner, () => {});
+    ahead.start([{ vendor: "Pipedrive", kind: "page", query: "Pipedrive pricing plans", fresh: true, max_results: 3 }]);
+    expect(ahead.take({ query: "pipedrive pricing 2026", fresh: true })).toBeDefined();
+    expect(ahead.take({ query: "hubspot pricing", fresh: true })).toBeUndefined();
+    expect(ahead.take({ query: "pipedrive", since: "2026-11-09" })).toBeUndefined();
+    await ahead.take({ query: "pipedrive pricing", fresh: true });
+    expect(calls).toBe(1);
   });
 });

@@ -19,7 +19,7 @@ export function phases(turn: ViewTurn): Record<Step, State> {
   const live = turn.status === "streaming";
   const recalled = turn.activity.some((a) => a.kind === "recall");
   const searches = turn.activity.filter((a): a is Search => a.kind === "search");
-  const searching = searches.some((s) => s.results === undefined && !s.failed);
+  const searching = searches.some((s) => !s.ahead && s.results === undefined && !s.failed);
   const writing = !!turn.text || turn.answer !== undefined;
   const settled = (cond: boolean, active: boolean): State => (active ? "active" : cond ? "done" : live ? "waiting" : "skipped");
   return {
@@ -127,9 +127,11 @@ export function Canvas({ turn, onPick, canPick, onClose, sheet }: { turn: ViewTu
 function SearchLane({ search, sources }: { search: Search; sources: Source[] }) {
   const busy = search.results === undefined && !search.failed;
   const filters = [search.since && `since ${formatDay(search.since)}`, ...(search.domains ?? []), search.fresh && "live read"].filter(Boolean) as string[];
+  const tag = search.drafting ? "writing" : search.reused ? "ready" : search.ahead ? "read ahead" : "";
   return (
-    <li className={`lane${busy ? " is-busy" : ""}${search.failed ? " is-failed" : ""}`}>
+    <li className={`lane${busy ? " is-busy" : ""}${search.failed ? " is-failed" : ""}${search.ahead ? " is-ahead" : ""}${search.reused ? " is-reused" : ""}`}>
       <div className="lane-head">
+        {tag && <span className="lane-tag">{tag}</span>}
         <span className="lane-query">{search.query}</span>
         {filters.map((f) => (
           <span key={f} className="lane-filter">{f}</span>

@@ -15,7 +15,7 @@ import { asked } from "../agents/conversation.ts";
 import { Channel } from "../agents/channel.ts";
 import { ENDING_PREFIX, stream } from "../agents/loop.ts";
 import type { ModelInfo } from "../agents/ports.ts";
-import { answerShapes, collectRefs } from "../domain/answers.ts";
+import { answerShapes, collectRefs, refId, showsNow, type SourceRef } from "../domain/answers.ts";
 import { bareCitations, citationsIn, describeProblems, malformedCitations, markUnverified, quoteFound, quoteProblems } from "../domain/quotes.ts";
 import type { Activity, Conversation, Source, TurnRecord } from "../domain/memory.ts";
 import { answerAsText } from "../domain/render.ts";
@@ -27,7 +27,8 @@ import { INSTRUCTION } from "./instruction.ts";
 import type { LedgerService } from "./ledger.ts";
 import type { RecallService } from "./recall.ts";
 import { CitedSearch, SEARCH_TOOL } from "./web-search.ts";
-import { planRechecks } from "../domain/recheck.ts";
+import { planReadAhead } from "../domain/recheck.ts";
+import { ReadAhead } from "./read-ahead.ts";
 
 export type TurnEvent =
   | { type: "start"; conversation: Conversation; turnId: string; at: string; model: ModelInfo }
@@ -92,32 +93,33 @@ export class ChatService {
     const activity: Activity[] = [...memory.activity];
     if (activity.length) out.push({ type: "activity", activity: [...activity] });
 
-    const tool = new CitedSearch(tools, (event, sources) => {
+    const upsert = (event: Activity) => {
       const at = activity.findIndex((a) => a.kind === "search" && event.kind === "search" && a.id === event.id);
       if (at >= 0) activity[at] = event;
       else activity.push(event);
       out.push({ type: "activity", activity: [...activity] });
-      out.push({ type: "sources", sources: [...sources] });
-    });
+    };
 
-    // A re-check starts with the pages the stated facts came from already re-read: planned from the
-    // ledger, fired in parallel through the same tool path, before the model's first token.
-    let context = memory.context;
-    let prefetched = false;
-    if (memory.recheck) {
-      const plan = planRechecks(memory.claims);
-      const reads = await Promise.all(plan.map((args, i) => tool.run({ id: `recheck-${i}`, name: SEARCH_TOOL.name, arguments: { ...args } }, input.signal)));
-      const done = plan.map((p, i) => ({ p, r: reads[i] })).filter(({ r }) => !r.failed);
-      if (done.length) {
-        prefetched = true;
-        const ran = done.map(({ p }) => `- "${p.query}"${p.domains ? ` on ${p.domains.join(", ")}, read live` : ""}${p.since ? ` since ${p.since}` : ""}`);
-        context +=
-          `\n\n<rechecked written-by="system">\nThese searches were already run for this re-check, just now:\n${ran.join("\n")}\n` +
-          `Running them again, or rewordings of them, returns the same pages. Answer from these results. Search again only ` +
-          `for a specific gap they leave (a vendor page that came back empty, say), at most once.\n\n` +
-          `${done.map(({ r }) => r.content).join("\n\n")}\n</rechecked>`;
-      }
-    }
+    // When memory brought back facts, the reads a re-check would need start now, in the
+    // background, beside the model's first request. The model decides whether to use them.
+    // Only on strong memory: one shared word is not enough to spend reads on.
+    const readAhead = memory.readAhead.length ? new ReadAhead(tools, upsert) : undefined;
+    readAhead?.start(planReadAhead(memory.readAhead), input.signal);
+
+    // Sources carry across the conversation, so a follow-up can cite (and have checked) a page
+    // an earlier answer found.
+    const prior = { sources: store.turns(conversation.id).flatMap((t) => t.sources), snapshots: store.snapshotsFor(conversation.id) };
+    const tool = new CitedSearch(
+      tools,
+      (event, sources) => {
+        upsert(event);
+        out.push({ type: "sources", sources: [...sources] });
+      },
+      { readAhead, prior },
+    );
+    if (prior.sources.length) out.push({ type: "sources", sources: [...tool.sources] });
+
+    const context = memory.context;
     const ask = asked(message, context);
     const fresh: Entry[] = [];
     const record = (shape: string, text: string, answer?: unknown): TurnRecord => ({
@@ -130,7 +132,7 @@ export class ChatService {
       lead: markUnverified((answer as { headline?: string } | undefined)?.headline?.trim() ?? text.trim(), tool.snapshots),
       shape,
       ...(answer === undefined ? {} : { answer }),
-      sources: tool.sources,
+      sources: tool.sourcesFor(text, JSON.stringify(answer ?? "")),
       activity,
       model: model.info.id,
     });
@@ -145,7 +147,7 @@ export class ChatService {
         instruction: INSTRUCTION,
         ask,
         history: store.transcript(conversation.id),
-        endings: answerShapes(() => tool.sources, () => tool.snapshots),
+        endings: answerShapes(() => tool.sources),
         // Prose quotes are checked against what each source actually said; a miss goes back once.
         checkReply: (text) => {
           // Proportionate: a citation standing in for the fact, a malformed one or an unknown source
@@ -157,7 +159,6 @@ export class ChatService {
           return problems.length ? describeProblems(problems) : null;
         },
         // The re-reads are done, so a re-check gets one round for gaps and then answers.
-        ...(prefetched ? { maxRounds: 2 } : {}),
         signal: input.signal,
       })) {
         if (event.type === "retract") {
@@ -168,6 +169,10 @@ export class ChatService {
           if (d.type === "text") {
             spoke += d.text;
             out.push({ type: "text", text: d.text });
+          } else if (d.type === "tool_input" && d.name === SEARCH_TOOL.name) {
+            // The query as the model writes it: a lane on screen before the search is even sent.
+            const q = (d.partial as { query?: string } | null)?.query;
+            if (q) upsert({ kind: "search", id: d.id, query: q, drafting: true });
           } else if (d.type === "tool_start") {
             // Whatever was said before a tool call is a note on the way, not the answer. For an
             // answer shape, the conclusion is its `headline`.
@@ -183,7 +188,7 @@ export class ChatService {
           if (event.entry.kind === "ran") toolMs += now - mark;
           mark = now;
         } else {
-          const turn = record(event.shape, event.text, markCardQuotes(event.answer, tool.snapshots));
+          const turn = record(event.shape, event.text, markCardQuotes(event.answer, tool.snapshots, tool.sources));
           store.append(conversation.id, [ask, ...fresh]);
           store.saveTurn(turn);
           store.saveSnapshots(turn, tool.snapshots);
@@ -191,7 +196,7 @@ export class ChatService {
           out.push({ type: "done", turn, cutShort: event.cutShort });
           const s = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
           log(
-            `turn ${turn.id.slice(0, 8)} ${model.info.label}${memory.recheck ? " (re-check)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
+            `turn ${turn.id.slice(0, 8)} ${model.info.label}${readAhead ? " (read ahead)" : ""}: ${rounds} model rounds ${s(modelMs)}, ` +
               `${tool.sources.length} sources from ${activity.filter((a) => a.kind === "search").length} searches ${s(toolMs)}, total ${s(Date.now() - started)}, ${turn.shape}`,
           );
           ledger.record(turn).then(
@@ -223,11 +228,17 @@ function titleFrom(message: string): string {
  * Flags each quoted source entry in a card as verified or not, for the screen. And a verdict with
  * nothing behind it is unverified by definition: "unchanged" citing no source is shown as such.
  */
-function markCardQuotes(answer: unknown, snapshots: ReadonlyMap<string, string>): unknown {
-  for (const item of (answer as { items?: { status: string; sources: unknown[]; note?: string }[] } | undefined)?.items ?? []) {
-    if (item.status === "unchanged" && !item.sources.length) {
+function markCardQuotes(answer: unknown, snapshots: ReadonlyMap<string, string>, sources: Source[]): unknown {
+  const card = answer as { since?: string; items?: { subject: string; status: string; sources: SourceRef[]; note?: string }[] } | undefined;
+  for (const item of card?.items ?? []) {
+    // "Unchanged" is a claim about now too: with nothing current behind it, it is unverified.
+    const current = item.sources.some((ref) => {
+      const source = sources.find((s) => s.id === refId(ref));
+      return !!source && !!card?.since && showsNow(item.subject, source, card.since);
+    });
+    if (item.status === "unchanged" && !current) {
       item.status = "unverified";
-      item.note = item.note ? `${item.note} (no source re-read this)` : "No source re-read this.";
+      item.note = item.note ? `${item.note} (nothing current re-read it)` : "Nothing current re-read this.";
     }
   }
   for (const ref of collectRefs(answer)) {

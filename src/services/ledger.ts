@@ -36,7 +36,9 @@ export class LedgerService {
       const c = turn.answer as z.infer<typeof Changes>;
       return c.items.filter((i) => i.now).map((i) => ({ subject: i.subject, value: i.now!, ...evidence(i.sources) }));
     }
-    if (turn.shape === "choices" || !this.extractor.available || !turn.answerText.trim()) return [];
+    // An answer from memory alone restates old facts; recording them now would re-date them and
+    // corrupt the baseline a later "since then?" is measured from.
+    if (turn.shape === "choices" || !turn.sources.length || !this.extractor.available || !turn.answerText.trim()) return [];
     // The lead keeps its quoted citations, so each extracted fact can carry the words it came from.
     return this.extractor.extract({ question: turn.question, answer: turn.lead || turn.answerText, sources: turn.sources });
   }

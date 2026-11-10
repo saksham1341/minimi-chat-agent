@@ -134,4 +134,5 @@ export function markUnverified(text: string, snapshots: ReadonlyMap<string, stri
   });
 }
 
-const unescape = (s: string) => s.replace(/\\(.)/g, "$1");
+// A model copying across a line break writes \n: that is whitespace, not the letter n.
+const unescape = (s: string) => s.replace(/\\[nrt]/g, " ").replace(/\\(.)/g, "$1");

@@ -65,4 +65,10 @@ describe("resolveTimeRefs", () => {
     expect(weekend.to.getTime() - weekend.from.getTime()).toBe(2 * 24 * 3600 * 1000);
     expect(day("the other day you said")).toEqual(["2026-11-04"]);
   });
+
+  it("reads 'a week or so back'", () => {
+    const [ref] = resolveTimeRefs("that db thing from a week or so back", NOW, IST);
+    expect(isoDay(dateIn(ref.from, IST))).toBe("2026-10-31");
+    expect(ref.to.getTime() - ref.from.getTime()).toBe(7 * 24 * 3600 * 1000);
+  });
 });

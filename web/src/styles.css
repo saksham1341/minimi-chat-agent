@@ -411,6 +411,17 @@ td.is-pending::after { content: ""; display: block; height: 0.7rem; width: 70%; 
 .canvas-note { margin: 0.6rem 0 0; font-family: var(--serif); font-style: italic; font-size: 0.9rem; color: var(--muted); }
 .source-date { flex: none; margin-left: auto; color: var(--faint); font-size: 0.75rem; }
 
+.status-label { flex: none; }
+.status-note { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--serif); font-style: italic; color: var(--faint); }
+.status { max-width: 100%; text-align: left; }
+.skeleton { display: grid; gap: 0.55rem; margin: 0.2rem 0 0.4rem; }
+.skeleton span { display: block; height: 0.8rem; border-radius: 4px; background: linear-gradient(90deg, var(--fog) 25%, var(--rule-soft) 50%, var(--fog) 75%); background-size: 200% 100%; }
+@media (prefers-reduced-motion: no-preference) { .skeleton span { animation: shimmer 1.2s linear infinite; } }
+.lane-tag { font-size: 0.68rem; font-weight: 650; padding: 0.05rem 0.4rem; border-radius: 4px; background: var(--fog); color: var(--muted); }
+.lane.is-ahead { border-style: dashed; }
+.lane.is-ahead .lane-query { color: var(--ink-soft); font-weight: 500; }
+.lane.is-reused .lane-tag { background: var(--teal-soft); color: var(--teal); }
+
 /* ---- small screens --------------------------------------------------------------------- */
 
 @media (max-width: 899px) {
