@@ -87,11 +87,11 @@ describe("which earlier exchange a message means", () => {
     expect(recall.preview("Do I need to run anything now before the upgrade?", "current", TUESDAY, IST)).toEqual([]);
   });
 
-  it("says plainly when a named day had nothing, and never shows what a day held unless it matched", () => {
-    const { context } = recall.recall("What did I ask you on 1 November?", "current", TUESDAY, IST);
-    expect(context).toMatch(/Nothing was asked on Sun, 1 Nov 2026/);
-    expect(context).not.toContain("espresso");
-    expect(context).not.toContain("Postgres");
+  it("says plainly when a named day had nothing, and matches nothing in its place", () => {
+    const r = recall.recall("What did I ask you on 1 November?", "current", TUESDAY, IST);
+    expect(r.context).toMatch(/Nothing was asked on Sun, 1 Nov 2026/);
+    expect(r.confidence).toBe("none");
+    expect(r.baseline).toEqual([]);
   });
 
   it("gives the original answer's facts as the baseline, with their quotes", () => {
@@ -183,7 +183,8 @@ describe("a busy day", () => {
   it("lets the topic pick among the day's exchanges, and re-checks only those", () => {
     const r = new RecallService(memoryWith(...day)).recall("Yesterday we compared postgres hosting. Has pricing changed?", "other", TUESDAY, IST);
     expect(r.baseline.map((c) => c.subject)).toEqual(["Managed Postgres hosts?"]);
-    expect(r.context).not.toContain("Latest Node LTS?");
+    const meant = r.context.slice(r.context.indexOf("Most likely meant"));
+    expect(meant).not.toContain("Latest Node LTS?");
   });
 
   it("is not confident which one a bare day means when several were asked", () => {
@@ -222,5 +223,18 @@ describe("topics the answer marks inline", () => {
     ledger.refine(turn, { kind: "new", summary: "s", entities: [{ name: "Neon", aliases: ["db host"] }], topics: [], facts: [] });
     expect(store.turnsWithTerms([matchForm("db host")], later, 10).size).toBe(1);
     expect(store.cardsFor([turn.id]).get(turn.id)?.summary).toBe("s");
+  });
+});
+
+describe("what have we talked about", () => {
+  it("lists the last week's exchanges by the summary their card gives, newest first, older ones left to matching", () => {
+    const store = memoryWith(postgres, crm, espresso, today, { ...espresso, at: "2026-10-20T07:00:00Z", question: "Old question about tea" });
+    const r = new RecallService(store).recall("What all have we talked about?", "other", TUESDAY, IST);
+    // Postgres (3 Nov, over a week before) is older: only matching reaches it.
+    expect(r.context).not.toContain(postgres.question);
+    const listed = [today, espresso, crm].map((f) => r.context.indexOf(f.question));
+    expect(listed.every((at) => at > 0)).toBe(true);
+    expect([...listed].sort((a, b) => a - b)).toEqual(listed);
+    expect(r.context).not.toContain("Old question about tea");
   });
 });

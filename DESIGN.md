@@ -96,7 +96,8 @@ A re-check always measures against the stated facts, never against the last chec
   - Within a named day, the topic decides: when some of that day's exchanges match the topic, the others are dropped. When none matches and more than two were asked, confidence is low.
 - **What the model sees.**
   - The current time.
-  - A calendar of counts per day for the last 3 weeks: never titles, because a model shown titles will remember conversations it never had.
+  - A calendar of counts per day for the last 3 weeks.
+  - The last week's exchanges, newest first (up to 30), each as its card's one-line summary, so "what have we talked about?" has an answer. Summaries, not titles: shown bare titles, a model remembered answers it never gave; a summary says what the answer was. Older weeks are reached by matching.
   - "Most likely meant", then "also possible". Each exchange shows how long ago it was, why it matched, the question, the answer, and the stated facts with their quotes.
   - Later observations, listed separately and dated.
   - For a named day with nothing on it, a line saying so.

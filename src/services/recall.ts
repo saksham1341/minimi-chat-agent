@@ -26,6 +26,9 @@ import type { MemoryStore } from "../ports/memory.ts";
 /** How far back a day can be named; older exchanges are found by topic. */
 const WINDOW_DAYS = 60;
 const CALENDAR_WEEKS = 3;
+/** How far back, and how many, exchanges are listed by summary. */
+const LATELY_DAYS = 7;
+const LATELY_MAX = 30;
 /** How many matched exchanges a re-check measures against. */
 const MAX_BASELINE = 2;
 /** A term carried by more than this share of exchanges is too common to point at one. */
@@ -81,7 +84,7 @@ export class RecallService {
   recall(message: string, conversationId: string, now: Date, tz: string): Recollection {
     const today = dateIn(now, tz);
     const { candidates, named, recent } = this.resolve(message, conversationId, now, tz);
-    const lines = [`Now: ${describeNow(now, tz)} (${tz}).`, "", ...calendar(today, tz, recent)];
+    const lines = [`Now: ${describeNow(now, tz)} (${tz}).`, "", ...calendar(today, tz, recent), "", ...this.lately(recent, now, tz)];
     const activity: Activity[] = [];
 
     for (const n of named.filter((n) => n.strength >= 0.8)) {
@@ -132,6 +135,25 @@ export class RecallService {
       claims: baseline.map((x) => ({ subject: x.subject, value: x.value, at: x.observedAt })),
     });
     return { context: wrap(lines), activity, baseline, confidence: top };
+  }
+
+  /**
+   * The last week's exchanges, newest first, each as the one-line summary its index card gives
+   * (written from the answer itself), so "what have we talked about?" has an answer. Summaries,
+   * not titles: a title invites the model to fill in an answer it never saw; a summary says what
+   * the answer was. Older weeks stay counts on the calendar, and topics reach them by matching.
+   */
+  private lately(recent: TurnRecord[], now: Date, tz: string): string[] {
+    const since = now.getTime() - LATELY_DAYS * 86_400_000;
+    const turns = recent.filter((t) => new Date(t.at).getTime() >= since).reverse().slice(0, LATELY_MAX);
+    if (!turns.length) return ["No exchanges in the last week."];
+    const cards = this.store.cardsFor(turns.map((t) => t.id));
+    const more = recent.filter((t) => new Date(t.at).getTime() >= since).length - turns.length;
+    return [
+      "The last week's exchanges, newest first (what each was about, in brief; nothing more is known about them unless it is shown below):",
+      ...turns.map((t) => `- ${shortDate(t.at, tz)} ${clock(t.at, tz)}: ${cards.get(t.id)?.summary || `asked "${clip(t.question, 120)}"`}`),
+      ...(more > 0 ? [`- and ${more} earlier this week`] : []),
+    ];
   }
 
   private resolve(message: string, conversationId: string, now: Date, tz: string) {
@@ -232,6 +254,9 @@ export function ago(iso: string, now: Date): string {
   const minutes = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60_000));
   const [n, unit] = minutes < 60 ? [minutes, "minute"] : minutes < 48 * 60 ? [Math.round(minutes / 60), "hour"] : [Math.round(minutes / 1440), "day"];
   return n === 0 ? "just now" : `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+}
+function clock(iso: string, tz: string) {
+  return new Date(iso).toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit" });
 }
 function shortDate(iso: string, tz: string) {
   return new Date(iso).toLocaleDateString("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" });
