@@ -28,6 +28,7 @@ export const INDEX_INSTRUCTION = `You index one exchange between a person and an
 - topics: what it was about, as short phrases ("Postgres hosting", "CRM pricing for small teams"), each with the same kinds of aliases. Name the subject the person cares about, not the mechanics of the answer.
 - kind: "recheck" when the question asks whether an earlier answer still holds or what changed since (a matched earlier exchange is a strong hint); "followup" when it continues this conversation's earlier question; "chat" for small talk; otherwise "new".
 - summary: what was asked and answered, at most 20 words, specific enough to tell it apart from similar exchanges.
+- An exchange that only recalls or lists earlier ones ("what have we talked about?", "what did I ask on Monday?") is about the conversation, not the topics it lists: kind "chat", one topic like "recap of earlier conversations", no entities or facts from what it listed. Those exchanges are indexed already, and indexing them again here would make every recap compete with the real one.
 - facts: only for a prose answer. Each checkable fact it states from a cited source (prices, limits, dates, versions, launches): the subject, specific ("Neon, Launch plan"); the value as stated, with its figure and unit; the source id it cited; and the exact quoted words of that citation. Never a fact the answer did not state. Empty for a table or what-changed answer, whose cells are recorded separately.`;
 
 export interface IndexContext {
