@@ -153,7 +153,8 @@ function ModelPicker({ meta, modelId, onModel }: { meta: Meta | null; modelId: s
 function useMemoryPreview(text: string, conversationId: string | null, busy: boolean): MemoryPreview[] {
   const [preview, setPreview] = useState<MemoryPreview[]>([]);
   useEffect(() => {
-    if (busy || text.trim().length < 8) {
+    // From one word on: "rust" is a topic as much as "the rust comparison" is.
+    if (busy || text.trim().length < 3) {
       setPreview([]);
       return;
     }
@@ -185,14 +186,19 @@ function MemoryLine({ preview, onPick }: { preview: MemoryPreview[]; onPick: (la
       </div>
     );
   }
-  const first = byDay[0] ?? preview[0];
-  const more = preview.length - 1;
+  // Every matched exchange, best first (the preview comes ordered by confidence).
+  const all = (byDay.length ? [...byDay, ...preview.filter((p) => !p.byDay)] : preview).flatMap((p) => p.questions.map((q) => ({ q, day: short(p.label) })));
+  const shown = all.slice(0, 2);
+  const more = all.length - shown.length;
+  const days = new Set(all.map((x) => x.day));
   return (
-    <div className="memory-line" aria-live="polite">
+    <div className="memory-line" aria-live="polite" title={all.map((x) => `${x.day}: ${x.q}`).join("\n")}>
       <span className="memory-dot" aria-hidden />
-      <span className="memory-line-label">Remembers {short(first.label)}</span>
-      <span className="memory-line-q">"{first.questions[0]}"</span>
-      {more > 0 && <span className="memory-line-more">and {more} more</span>}
+      <span className="memory-line-label">
+        {all.length === 1 ? `Remembers ${all[0].day}` : `Remembers ${all.length} exchanges${days.size === 1 ? `, ${[...days][0]}` : ""}`}
+      </span>
+      <span className="memory-line-q">{shown.map((x) => `"${x.q}"`).join(" · ")}</span>
+      {more > 0 && <span className="memory-line-more">+{more}</span>}
     </div>
   );
 }

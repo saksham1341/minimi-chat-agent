@@ -88,7 +88,7 @@ A re-check always measures against the stated facts, never against the last chec
 ### Resolving a reference
 
 - **Days.** `domain/calendar.ts` writes out every way of naming each of the last 60 days as seen from today ("yesterday", "last tuesday", "3 november", "a week or so back"), each with a strength. Nothing parses the message: its word sequences are looked up among those phrases. A new phrasing is a new line there, never a grammar rule.
-- **Topics.** The message's word sequences are matched against the cards' terms. A term carried by more than 30% of exchanges says nothing and is ignored.
+- **Topics.** The message's word sequences are matched against the cards' terms, regardless of any day words. A single word also matches inside a term ("postgres" in "managed postgres hosting"), at a third of a phrase's weight. A term or word carried by more than 30% of exchanges says nothing and is ignored, which is what keeps "for" or "pricing" from matching everything, with no stopword list.
 - **Confidence.**
   - High: a strongly named day plus a topic match.
   - Medium: an exact day, a multi-word topic, or a day plus a topic.

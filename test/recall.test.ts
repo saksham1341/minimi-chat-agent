@@ -238,3 +238,14 @@ describe("what have we talked about", () => {
     expect(r.context).not.toContain("Old question about tea");
   });
 });
+
+describe("one word", () => {
+  it("finds an exchange whose terms contain it, at low confidence on its own and high with its day", () => {
+    const store = memoryWith({ ...postgres, terms: ["managed Postgres hosting", "db hosts"] }, crm, espresso);
+    const recall = new RecallService(store);
+    const alone = recall.recall("postgres", "other", TUESDAY, IST);
+    expect(alone.confidence).toBe("low");
+    expect(alone.context).toContain(postgres.question);
+    expect(recall.recall("Last Tuesday, postgres: still right?", "other", TUESDAY, IST).confidence).toBe("high");
+  });
+});

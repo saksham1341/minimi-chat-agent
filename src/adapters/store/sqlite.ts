@@ -163,6 +163,16 @@ export class SqliteMemory implements MemoryStore {
     return new Map(rows.map((r) => [r.term as string, r.n as number]));
   }
 
+  turnsWithWord(word: string, before: Date, limit: number): string[] {
+    const rows = this.db
+      .prepare(
+        `select distinct exchange_terms.turn_id as id from exchange_terms join turns on turns.id = exchange_terms.turn_id
+         where (term like ? or term like ? or term like ?) and turns.at <= ? order by turns.at desc limit ?`,
+      )
+      .all(`${word} %`, `% ${word}`, `% ${word} %`, before.toISOString(), limit) as Row[];
+    return rows.map((r) => r.id as string);
+  }
+
   turnsByIds(ids: string[]): TurnRecord[] {
     if (!ids.length) return [];
     return (this.db.prepare(`select * from turns where id in (${ids.map(() => "?").join(",")})`).all(...ids) as Row[]).map(toTurn);

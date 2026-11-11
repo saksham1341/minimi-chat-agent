@@ -50,7 +50,7 @@ export function serve(app: App, staticDir: string) {
         const q = url.searchParams;
         const message = (q.get("message") ?? "").slice(0, 2000);
         const zone = validZone(q.get("timeZone") ?? undefined) ?? app.settings.timeZone;
-        return json(res, message.trim().length < 8 ? [] : app.recall.preview(message, q.get("conversationId") ?? "", app.clock.now(), zone));
+        return json(res, message.trim().length < 3 ? [] : app.recall.preview(message, q.get("conversationId") ?? "", app.clock.now(), zone));
       }
       if (path === "/mcp") {
         // The tool server is for the runtime, which by default is this same process.

@@ -35,6 +35,8 @@ export interface MemoryStore {
   turnsWithTerms(terms: string[], before: Date, limit: number): Map<string, string[]>;
   /** How many exchanges before `before` carry each term: how much a match on it says. */
   termFrequency(terms: string[], before: Date): Map<string, number>;
+  /** Exchanges before `before` with a term containing this word as a whole word ("postgre" in "managed postgre hosting"), newest first. */
+  turnsWithWord(word: string, before: Date, limit: number): string[];
   turnsByIds(ids: string[]): TurnRecord[];
   /** The exact text each source showed the model for this turn: the evidence as it stood that day. */
   saveSnapshots(turn: TurnRecord, texts: ReadonlyMap<string, string>): void;

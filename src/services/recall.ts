@@ -77,7 +77,7 @@ export class RecallService {
       label: dayLabel(members[0].day),
       byDay: members.some((c) => c.dayStrength > 0),
       confidence: best(members.map((c) => c.confidence)),
-      questions: [...new Set(members.map((c) => c.turn.question))].slice(0, 3),
+      questions: [...new Set(members.map((c) => c.turn.question))].slice(0, 5),
     }));
   }
 
@@ -168,8 +168,18 @@ export class RecallService {
     const specific = [...frequency.entries()].filter(([, n]) => n <= Math.max(2, total * COMMON_SHARE)).map(([term]) => term);
     const byTerm = this.store.turnsWithTerms(specific, now, 200);
 
+    // A word of the message inside an exchange's term ("postgres" in "managed postgres hosting"):
+    // a weaker match than the whole term, and filtered for commonness the same way, so "for" or
+    // "pricing" in most terms points at nothing.
+    const byWord = new Map<string, string[]>();
+    for (const word of [...said].filter((w) => !w.includes(" ") && w.length >= 3)) {
+      const found = this.store.turnsWithWord(word, now, 200);
+      if (!found.length || found.length > Math.max(2, total * COMMON_SHARE)) continue;
+      for (const id of found) if (!(byTerm.get(id) ?? []).includes(word)) byWord.set(id, [...(byWord.get(id) ?? []), word]);
+    }
+
     const byDay = new Map(named.map((n) => [isoDay(n.day), n]));
-    const ids = new Set<string>(byTerm.keys());
+    const ids = new Set<string>([...byTerm.keys(), ...byWord.keys()]);
     for (const t of recent) if (byDay.has(isoDay(dateIn(new Date(t.at), tz)))) ids.add(t.id);
 
     const candidates: Candidate[] = [];
@@ -177,9 +187,11 @@ export class RecallService {
       if (turn.conversationId === conversationId) continue; // already in the transcript
       const day = dateIn(new Date(turn.at), tz);
       const n = byDay.get(isoDay(day));
-      const terms = byTerm.get(turn.id) ?? [];
-      // A phrase of several words ("db hosts") says more than one word ("neon").
-      const weight = terms.reduce((sum, t) => sum + (t.includes(" ") ? 1.5 : 1), 0);
+      const words = byWord.get(turn.id) ?? [];
+      const terms = [...(byTerm.get(turn.id) ?? []), ...words];
+      // A phrase of several words ("db hosts") says more than one word ("neon"), and a whole term
+      // more than a word found inside one.
+      const weight = (byTerm.get(turn.id) ?? []).reduce((sum, t) => sum + (t.includes(" ") ? 1.5 : 1), 0) + words.length * 0.5;
       const confidence: Confidence =
         n && n.strength >= 0.8 && weight > 0 ? "high" : (n && n.strength >= 0.9) || weight >= 1.5 || (n && weight > 0) ? "medium" : "low";
       candidates.push({ turn, day, dayStrength: n?.strength ?? 0, dayPhrase: n?.phrase, terms, confidence });
