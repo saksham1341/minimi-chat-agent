@@ -141,7 +141,7 @@ Actual time is spent on the model writing. Perceived time is designed:
 - what the model writes before a search shows as working notes, which fold away when the answer lands;
 - the answer is final when its text ends: citations land behind it and the index card is written afterwards, both on the light model, so nobody waits for either;
 - the model reads passages, not pages, which shortens its start;
-- planning every search up front with the light model (`services/planner.ts`, `PLAN_SEARCHES=true`) is built but off: on Bedrock a Haiku plan took 3–5 s, as long as Sonnet's own first round, and slowed answers that needed no search;
+- planning every search up front with the light model (`services/planner.ts`, `PLAN_SEARCHES=true`) is built but off. Measured on Bedrock with Haiku: a plan takes 2–3.5 s, but Sonnet still searched again after it, so it added a step without removing one; first text came much later (17 s against 4 s, without Sonnet's early working note); memory-only answers slowed by about 2 s; and the extra calls drew provider throttling;
 - the search cache shares in-flight requests and reuses results for 10 minutes (2 minutes for live reads);
 - the re-check's page reads run in parallel with a hard 4 s wait.
 
@@ -172,6 +172,6 @@ Actual time is spent on the model writing. Perceived time is designed:
 
 - **Embeddings**, because the card's aliases carry the meaning and exact matching can be explained and tested.
 - **A recall tool or a router model**, because each one is a model round to wait for. (Indexing and citing are model calls, but nobody waits for them.)
-- **Search planning by default**: built, but on Bedrock a Haiku plan took as long as Sonnet's own first round (see Speed).
+- **Search planning by default**: built, but measured no faster end to end, and later to first text (see Speed).
 - **Provider-native citations**, because they only work with Claude.
 - **Sign-in and per-person memory**: one person per deployment for now.

@@ -87,8 +87,8 @@ export function assemble(settings: Settings, log: (message: string) => void = co
   const ledger = new LedgerService(store);
   const indexer = new Indexer({ runtime, ledger, log });
   const citer = new Citer({ runtime, log });
-  // Measured on Bedrock: a Haiku plan took 3-5 s, as long as Sonnet's own first round, and slowed
-  // answers that needed no search. Kept for faster light models, off unless asked for.
+  // Measured on Bedrock with Haiku: a plan takes 2-3.5 s, the answering model still searched after
+  // it, first text came much later and memory-only answers slowed. Off unless asked for.
   const planner = settings.planSearches ? new Planner({ runtime, log }) : undefined;
   const chat = new ChatService({ store, clock, models: catalog, runtime, search, recall, ledger, indexer, citer, planner, log });
 

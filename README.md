@@ -26,7 +26,7 @@ The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?")
 - **A driver and a backend.** The runtime holds the models and keys and reaches the backend only over MCP, as any agent would: point Claude Code at `/mcp` and it gets the same search. The backend never holds a model key. It runs in-process by default or as its own deployment (`APP_AGENTS=remote`). Inside the backend: ports and adapters, import direction enforced by a test.
 - **Feeling fast is design too.** Activity shows in under 0.1 s, working notes from about 2 s, and search lanes as the model types each query.
 
-Measured on Sonnet 4.5 (answers) and Haiku 4.5 (citations, index cards) via Bedrock: memory-only answers 4–7 s; a searched answer about 17 s, its last citations about 3 s later; a fresh comparison about 35 s.
+Measured on Sonnet 4.5 (answers) and Haiku 4.5 (citations, index cards) via Bedrock: memory-only answers about 4 s; a searched answer 13–26 s, its last citations 1–3 s later and its index card about 3 s after that; a fresh comparison about 35 s.
 
 ## Considered and rejected
 
@@ -41,6 +41,6 @@ Measured on Sonnet 4.5 (answers) and Haiku 4.5 (citations, index cards) via Bedr
 ## With another week
 
 - **Evals:** dated multi-session scripts on a frozen clock, scoring resolution, quote validity and verdicts.
-- **Search planning on a faster light model:** built (`PLAN_SEARCHES`), off because Bedrock Haiku plans no faster than Sonnet's own first round.
+- **Search planning that saves a round:** built (`PLAN_SEARCHES`), off because the answering model still searched after a Haiku plan, so it delayed the first words without saving time.
 - **Scheduled re-checks of the ledger** with the same quote diff.
 - **Sign-in and per-person memory.**
