@@ -8,6 +8,28 @@ npm start               # http://localhost:3000  (HOST=0.0.0.0 to open it to you
 
 Node 22.13+. Every variable it reads is in `.env.example`; startup prints what it found. How it fits together, in more depth: [`DESIGN.md`](DESIGN.md).
 
+## What it looks like
+
+A comparison, answered from the web. Each cell carries its sources; a red mark is a quote that could not be found word for word in the page, shown as unverified rather than hidden.
+
+![Comparison of managed Postgres hosts with per-cell citations](docs/screenshots/03-comparison.png)
+
+Hover a citation to see the exact words it rests on, quoted from the page as it read when the answer was written.
+
+![A citation preview showing the quoted passage from supabase.com](docs/screenshots/04-citation-quote.png)
+
+Later, in a new conversation: memory is matched as you type, before anything is sent.
+
+![The composer showing the remembered exchange while the question is typed](docs/screenshots/05-memory-preview.png)
+
+The earlier exchange comes back with its facts, and the pages it quoted are re-read before the model starts.
+
+![Re-check in progress: recalled facts and the earlier answer's pages being re-read](docs/screenshots/06-recheck-reading.png)
+
+The answer is a verdict per fact, each with its evidence.
+
+![What changed: a verdict per fact with citations](docs/screenshots/07-what-changed.png)
+
 ## How it works
 
 The brief's questions ("On Monday we shortlisted 5 CRM tools… changed since?") need **the right earlier exchange, what it said, and evidence about now**. The model writes the metadata; software does the matching and checking.
