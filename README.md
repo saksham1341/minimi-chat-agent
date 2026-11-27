@@ -1,5 +1,7 @@
 # A chat agent that knows what day it is, and shows its evidence
 
+Built for Minimi's hiring challenge. Minimi is the company that set the challenge; the agent itself has no product name.
+
 ```bash
 cp .env.example .env    # a model (Anthropic API or AWS Bedrock) and a search key (Exa or Tavily)
 npm install
